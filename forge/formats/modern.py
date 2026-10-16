@@ -6,7 +6,8 @@ texture_bytes().
 Material roles (measured on LEGO Batman 2's definitions against characters whose colours are known):
 the shared minifig's materials are named for their role (HEAD_FRONT_GAME ...); a definition's 'Character Texture'
 gives a texture per role number: 1 head front, 2 head back, 3 body front, 4 body back, 5 right arm, 24 left arm,
-6 right hand, 26 left hand, 7 hips, 8 right leg, 25 left leg, 10 cape, 13 cape lining.
+6 right hand, 26 left hand, 7 hips, 8 right leg, 25 left leg, 10 cape, 13 cape lining, 9 hair / hat colour
+(attachments' Hat_Colour material).
 """
 import os
 import struct
@@ -15,7 +16,8 @@ from . import nxgdisp, nxgmesh, nxgskel, ttstream
 from .classic import FormatError, mat_mul
 
 ROLE = {'HEAD_FRONT': 1, 'HEAD_BACK': 2, 'BODY_FRONT': 3, 'BODY_BACK': 4, 'RIGHTARM': 5, 'LEFTARM': 24,
-        'RIGHTHAND': 6, 'LEFTHAND': 26, 'HIPS': 7, 'RIGHTLEG': 8, 'LEFTLEG': 25, 'CAPE': 10, 'CAPE_INSIDE': 13}
+        'RIGHTHAND': 6, 'LEFTHAND': 26, 'HIPS': 7, 'RIGHTLEG': 8, 'LEFTLEG': 25, 'CAPE': 10, 'CAPE_INSIDE': 13,
+        'HAT_COLOUR': 9}
 IDENTITY = [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0]
 SKELETON_MODELS = {'super_minifig': ('minifigs', 'super_characters', 'super_minifig', 'super_minifig_nxg.ghg')}
 
@@ -96,11 +98,51 @@ class Character:
             elif o['class'] == 'Character Layer Special':
                 self.layer_choice[g.get('Layer Id')] = g.get('Layer Special')
             elif o['class'] == 'Character Attachment':
-                self.attachments.append({k: g.get(k) for k in ('Attachment Name', 'Layer', 'Resource File',
+                self.attachments.append({k: g.get(k) for k in ('Attachment Name', 'Layer', 'Resource File', 'Locator',
                                                                 'Object Name')})
         self.textures = []          # [path of a .tex], indexed by material()['texture']
         self._tex_index = {}
+        self.attached = []          # [(model bytes, MeshSection, material names)] of attachments
         self.layers = self._layers()
+        self._attachments()
+
+    def _attachments(self):
+        """A definition's attachments (Batman's cowl is his 'Face') become rigid layers on their locator's bone.
+        Mesh numbers of attachment k are 100000 * (k + 1) + its own mesh number."""
+        locators, remap = self.skel['locators'], self.skel['remap']
+        for att in self.attachments:
+            res = att.get('Resource File') or ''
+            if not res:
+                continue
+            rel = res.replace('\\', '/').split('/')
+            if rel[0].lower() == 'chars':
+                rel = rel[1:]
+            rel[-1] = rel[-1] + '_nxg.ghg'
+            path = _find(self.chars_dir, rel)
+            if not path:
+                continue
+            try:
+                d = open(path, 'rb').read()
+                mesh = nxgmesh.MeshSection(d)
+                disp = nxgdisp.read(d, len(mesh.parts))
+            except (ValueError, struct.error, IndexError, OSError):
+                continue
+            if not disp['specials']:
+                continue
+            loc = att.get('Locator')
+            li = remap[loc] if isinstance(loc, int) and 0 <= loc < len(remap) else 255
+            if li == 255 or li >= len(locators):
+                continue
+            k = len(self.attached)
+            self.attached.append((d, mesh, material_names(d)))
+            base = 100000 * (k + 1)
+            sp = disp['specials'][0]          # the first is the most detailed
+            mats = {base + m: mat for m, mat in sp['parts']}
+            self._mesh_mat.update(mats)
+            self.layers.append({'index': len(self.layers), 'name': f'TT_{att.get("Attachment Name") or "Attachment"}',
+                                'chosen': True, 'parts': [{
+                                    'special': sp['name'], 'kind': 'rigid', 'bone': locators[li]['joint'],
+                                    'meshes': sorted(mats), 'mats': mats, 'matrix': list(locators[li]['matrix'])}]})
 
     def _model(self, override, skeleton):
         if override:
@@ -151,16 +193,24 @@ class Character:
                 self._mesh_mat.update(part['mats'])
         return out
 
+    def _source(self, mesh_index):
+        if mesh_index >= 100000:
+            d, mesh, names = self.attached[mesh_index // 100000 - 1]
+            return mesh, names, mesh_index % 100000
+        return self.mesh, self.material_names, mesh_index
+
     def geometry(self, mesh_index):
+        mesh, _names, i = self._source(mesh_index)
         try:
-            pos, nrm, uv, col, tris, skin = self.mesh.geometry(mesh_index)
+            pos, nrm, uv, col, tris, skin = mesh.geometry(i)
         except (ValueError, struct.error, IndexError):
             return None
         return pos, nrm or [], [tuple(u[:2]) for u in uv] if uv else [], col, [tuple(t) for t in tris], skin
 
     def material(self, mesh_index):
         mi = self._mesh_mat.get(mesh_index)
-        name = self.material_names[mi] if mi is not None and mi < len(self.material_names) else ''
+        _mesh, names, _i = self._source(mesh_index)
+        name = names[mi] if mi is not None and mi < len(names) else ''
         role = name.split(':')[0].upper()
         role = role[:-5] if role.endswith('_GAME') else role
         path = self.role_textures.get(ROLE.get(role))
