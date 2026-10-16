@@ -457,15 +457,20 @@ class Character:
             chosen = named or ingame or first or specials[:1]
             # a rigid piece of the attachment sits on a joint of its own skeleton: its vertices are in that
             # joint's frame, so the joint's bind position comes first, then the locator
-            joint_world = {}
+            joint_world, mentioned = {}, set()
             for sk in am.skeletons:                  # one copy per detail level, each naming its own pieces
                 worlds = []
                 for j in sk['joints']:
                     m = list(j['bind'])
                     worlds.append(m if j['parent'] is None else mat_mul(m, worlds[j['parent']]))
                 for item in sk['meta']:
+                    # a piece's first mention decides (LEGO Pirates' goatee face: skinned in the first copy,
+                    # rigid on a turned joint in a later one)
+                    if item['special'] in mentioned:
+                        continue
+                    mentioned.add(item['special'])
                     if item['kind'] == 0 and item['joint'] < len(worlds):
-                        joint_world.setdefault(item['special'], worlds[item['joint']])
+                        joint_world[item['special']] = worlds[item['joint']]
             label = att.get('Attachment Name') or stem            # LEGO Marvel leaves the name out: the file's
             parts = []
             for sp in chosen:
