@@ -115,10 +115,44 @@ class Model:
             self._slots = texture_slots(self.d, self._table, len(self.bundle[1]))
         if not 0 <= material_index < len(names) or self._slots[material_index] is None:
             return None
-        t = self._slots[material_index][0]
+        row = self._slots[material_index]
+        t = row[0]
         if t < 0 or t >= len(self.bundle[1]) or self.bundle[1][t] is None:
             return None
+        layered = self._layered(row)
+        if layered:
+            return layered
         return (self.bundle[0],) + self.bundle[1][t]
+
+    def _span(self, t):
+        sp = self.bundle[1]
+        return sp[t] if 0 <= t < len(sp) and sp[t] else None
+
+    def _flat_colour(self, t):
+        """The colour of a tiny one-colour texture (an 8 x 8 DXT1), or None."""
+        span = self._span(t)
+        if span is None or span[1] - span[0] > 300:
+            return None
+        import io
+        from PIL import Image
+        with open(self.bundle[0], 'rb') as f:
+            f.seek(span[0])
+            im = Image.open(io.BytesIO(f.read(span[1] - span[0]))).convert('RGB')
+        lo, hi = zip(*im.getextrema())
+        return lo if lo == hi else None
+
+    def _layered(self, row):
+        """LEGO Marvel's layered metal materials (material_remap_destroyer, _archangel: 165 of them): slot 0 holds
+        a stock cyan 8 x 8 texture (0, 172, 238), slot 1 the metal's flat colour and slot 4 a mask whose blue
+        channel draws the panel lines. Shown as the metal's colour with the lines darkened:
+        ('layered', file, colour, mask span), or None for any other material."""
+        if len(row) < 5 or self._flat_colour(row[0]) != (0, 172, 238):
+            return None
+        mask = self._span(row[4])
+        colour = self._flat_colour(row[1]) if row[1] >= 0 else None
+        if mask is None or mask[1] - mask[0] < 4000 or colour is None:
+            return None
+        return ('layered', self.bundle[0], colour, mask)
 
     def material_by_name(self, name):
         names = [n.split(':')[0].lower() for n in self.material_names]
@@ -971,6 +1005,8 @@ class Character:
 
     def texture_bytes(self, index):
         ref = self.textures[index]
+        if isinstance(ref, tuple) and ref[0] == 'layered':
+            return _layered_png(*ref[1:])
         if isinstance(ref, tuple):                     # (file, start, end) inside a model or texture bundle
             with open(ref[0], 'rb') as f:
                 f.seek(ref[1])
@@ -983,3 +1019,19 @@ class Character:
             return ''
         h = self.texture_bytes(index)[:128]
         return h[84:88].decode('latin1') if h[:4] == b'DDS ' else ''
+
+
+def _layered_png(file, colour, mask):
+    """A layered metal material as one picture (see Model._layered): its colour, darkened along the mask's lines
+    (blue channel), as PNG bytes."""
+    import io
+    import numpy as np
+    from PIL import Image
+    with open(file, 'rb') as f:
+        f.seek(mask[0])
+        m = np.asarray(Image.open(io.BytesIO(f.read(mask[1] - mask[0]))).convert('RGB'), dtype=np.float32)
+    lines = m[:, :, 2:3] / 255.0
+    rgb = np.asarray(colour, dtype=np.float32).reshape(1, 1, 3) * (1.0 - 0.55 * lines)
+    out = io.BytesIO()
+    Image.fromarray(np.clip(rgb, 0, 255).astype(np.uint8), 'RGB').save(out, 'PNG')
+    return out.getvalue()
