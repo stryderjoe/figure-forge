@@ -49,6 +49,8 @@ class An3:
         self.channels = self.curve_count if self.newer else 9
         cbase, cscale = struct.unpack_from(e + "ff", d, 28)
         sm, cp, ktp, kp, csf = struct.unpack_from(e + "5I", d, 36)
+        if cp > ktp:            # LEGO Pirates (ANI9) stores the key-type table first, then the constants
+            cp, ktp = ktp, cp
         if self.self_relative:
             sm, cp, ktp, kp, csf = [v + 36 + 4 * i if v else 0 for i, v in enumerate((sm, cp, ktp, kp, csf))]
         self.key_types = struct.unpack_from(f"{e}{self.nodes * self.channels}H", d, ktp)

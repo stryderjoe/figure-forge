@@ -51,27 +51,40 @@ class MeshSection:
     def __init__(self, data):
         self.d = data
         at = data.find(b'HSEM')
-        while at >= 0 and struct.unpack_from('>I', data, at + 4)[0] not in (47, 48, 161, 169):
+        while at >= 0 and struct.unpack_from('>I', data, at + 4)[0] not in (46, 47, 48, 161, 169):
             at = data.find(b'HSEM', at + 4)
         if at < 0:
             raise MeshError('no MESH section of a known version')
         c = C(data, at + 4)
         self.version = c.u32()
-        self.old = self.version in (47, 48)
-        if data[c.p:c.p + 4] != b'ROTV':
+        self.old = self.version in (46, 47, 48)
+        # LEGO Pirates' MESH 46 / 47 has the count without the marker, and 40-byte part tails (72 in LEGO Batman 2)
+        self.tail = 72
+        if data[c.p:c.p + 4] == b'ROTV':
+            c.p += 4
+        elif self.version in (46, 47):
+            self.tail = 40
+        else:
             raise MeshError('MESH without ROTV')
-        c.p += 4
         count = c.u32()
         self.buffers, self.parts, self.serial, refs = {}, [], 0, []
         for _ in range(count):
             part = {'streams': []}
-            for _s in range(c.u32()):
+            for _s in range(c.u32() & 0xFF):          # the low byte is the count (LEGO Pirates: 0x0601 = 1)
                 key = self._buffer(c, 'vertex', refs)
                 part['streams'].append((key, c.u32()))
-            if c.u32() != 0:
+            short = c.u32()
+            if short and self.tail != 40:
                 raise MeshError(f'unexpected field at {c.p - 4:#x}')
             part['index'] = self._buffer(c, 'index', refs)
             part['first_index'], part['index_count'], part['first_vertex'] = c.u32(), c.u32(), c.u32()
+            if short:
+                # LEGO Pirates' short record: the vertex count in place of the zero, nothing after the indices
+                # (they draw from position-only buffers: depth / shadow copies, not shown)
+                part['vertex_count'], part['palette'], part['morphs'], part['short'] = short, [], [], True
+                self.serial += 1
+                self.parts.append(part)
+                continue
             c.u16()
             part['vertex_count'] = c.u32()
             c.take(4)
@@ -106,8 +119,20 @@ class MeshSection:
                     part['morphs'].append((target, 'runs', at_runs, size))
                     self.serial += bool(n)       # a target with an index list counts one record more
                 self.serial += 2
-            c.take(72)
-            self.serial += 1
+            if self.tail == 40 and len(self.parts) + 1 < count:
+                # LEGO Pirates: the tail is 40 bytes or longer (not understood); the next part is the first
+                # place after it that reads as a part start
+                q = c.p + 40
+                while q < c.p + 400 and not self._part_start(q):
+                    q += 4
+                if not self._part_start(q):
+                    raise MeshError(f'next part not found after {c.p:#x}')
+                c.p = q
+            else:
+                c.take(self.tail)
+            # a full record counts one record in LEGO Batman 2, none in LEGO Pirates (measured on shared
+            # buffer references); a short one counts one
+            self.serial += 0 if self.tail == 40 else 1
             self.parts.append(part)
         self.end = c.p
         # buffer references count every buffer-like record read; find the base that makes them all fit
@@ -121,6 +146,25 @@ class MeshSection:
             base = bases.pop()
             for absolute, kind, slot in refs:
                 slot[0] = absolute - base
+
+    def _part_start(self, q):
+        """Whether a part record (LEGO Pirates) starts at q: stream count 1 to 4, then a new vertex buffer with a
+        valid descriptor list, or a reference (0xC000nnnn, 1)."""
+        d = self.d
+        if q + 32 > len(d):
+            return False
+        ns, tok = struct.unpack_from('>II', d, q)
+        if not (1 <= ns & 0xFF <= 4 and ns < 0x10000):
+            return False
+        if tok & 0xFFFF0000 == 0xC0000000:
+            return struct.unpack_from('>I', d, q + 8)[0] == 1
+        if tok != 1:
+            return False
+        flags, count, nd = struct.unpack_from('>III', d, q + 8)
+        if not (0 < count < 1 << 20 and 1 <= nd <= 12):
+            return False
+        desc = [tuple(d[q + 20 + 3 * i:q + 23 + 3 * i]) for i in range(nd)]
+        return all(a < 16 and t in SIZES and o < 64 for a, t, o in desc) and desc[0][2] == 0
 
     def _buffer(self, c, kind, refs):
         token = c.u32()

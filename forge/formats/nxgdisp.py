@@ -21,16 +21,18 @@ def read(d, part_count):
         raise DispError('no display section')
     version, n = struct.unpack_from('>II', d, at + 4)
     p = at + 12 + n
-    if d[p:p + 4] != b'ROTV':
-        raise DispError('display commands not found')
-    nc = struct.unpack_from('>I', d, p + 4)[0]
-    p += 8
+    marked = d[p:p + 4] == b'ROTV'           # LEGO Pirates' DISP 7 / 8 has counts without the marker
+    p += 4 if marked else 0
+    nc = struct.unpack_from('>I', d, p)[0]
+    p += 4
     commands = [struct.unpack_from('>BBI', d, p + 6 * i) for i in range(nc)]
     p += 6 * nc
-    if d[p:p + 4] != b'ROTV':
-        raise DispError('clip table not found')
-    ncl = struct.unpack_from('>I', d, p + 4)[0]
-    p += 8
+    if marked:
+        if d[p:p + 4] != b'ROTV':
+            raise DispError('clip table not found')
+        p += 4
+    ncl = struct.unpack_from('>I', d, p)[0]
+    p += 4
     clips = []
     for _ in range(ncl):
         p += 2
@@ -49,44 +51,68 @@ def read(d, part_count):
     end = len(d) if end < 0 else end
     q = p
     while True:
-        q = d.find(b'ROTV', q, end)
+        if marked:
+            q = d.find(b'ROTV', q, end)
+        elif q >= end - 8:
+            q = -1
         if q < 0:
             raise DispError('specials not found')
-        specials = _specials(d, q, end, names, clips, commands, part_count)
+        # without markers (LEGO Pirates): the count is at q, so q - 4 stands in for the marker; a real list
+        # starts with a named instance
+        specials = (_specials(d, q, end, names, clips, commands, part_count) if marked
+                    else _specials(d, q - 4, end, names, clips, commands, part_count, need_name=True))
         if specials is not None:
             return {'version': version, 'commands': commands, 'clips': clips, 'specials': specials}
-        q += 4
+        q += 4 if marked else 1
 
 
-def _specials(d, q, end, names, clips, commands, part_count):
+def _record(d, p, end, names, clips, commands, part_count, i):
+    """One named model instance at p, or None when p does not hold one."""
+    if p + 208 > end:
+        return None
+    off = struct.unpack_from('>I', d, p)[0]
+    clip, flags, ranges = struct.unpack_from('>3I', d, p + 180)
+    if ranges > 8 or (clip >= len(clips) and clip != 0xFFFFFFFF):
+        return None
+    if names is not None:
+        # a name starts at a string boundary of the name table
+        if off > 0x100000 or (off and d[names + off - 1] != 0):
+            return None
+        e = d.find(bytes([0]), names + off, names + off + 256)
+        if e < 0:
+            return None
+        name = d[names + off:e].decode('latin1')
+        if not name or not all(32 < ord(ch) < 127 for ch in name):
+            return None
+    else:
+        name = f'special{i}'
+    matrix = struct.unpack_from('>16f', d, p + 4)
+    if not all(abs(v) < 1e4 for v in matrix):          # NaN fails too
+        return None
+    parts = []
+    if clip != 0xFFFFFFFF:
+        for mat, ci in clips[clip]:
+            op, _fl, value = commands[ci]
+            if op in (0x80, 0xB3):
+                if value >= part_count:
+                    return None
+                parts.append((value, mat))
+    return {'name': name, 'matrix': matrix, 'clip': clip, 'flags': flags, 'parts': parts,
+            'size': 204 + 4 * ranges}
+
+
+def _specials(d, q, end, names, clips, commands, part_count, need_name=False):
     count = struct.unpack_from('>I', d, q + 4)[0]
     if not 0 < count < 4096:
+        return None
+    if need_name and (count < 2 or struct.unpack_from('>I', d, q + 8)[0] == 0):
         return None
     p = q + 8
     out = []
     for i in range(count):
-        if p + 208 > end:
+        rec = _record(d, p, end, names, clips, commands, part_count, i)
+        if rec is None:
             return None
-        off = struct.unpack_from('>I', d, p)[0]
-        clip, flags, ranges = struct.unpack_from('>3I', d, p + 180)
-        if ranges > 8 or (clip >= len(clips) and clip != 0xFFFFFFFF):
-            return None
-        if names is not None:
-            e = d.find(b'\0', names + off, names + off + 256)
-            if e < 0:
-                return None
-            name = d[names + off:e].decode('latin1')
-        else:
-            name = f'special{i}'
-        matrix = struct.unpack_from('>16f', d, p + 4)
-        parts = []
-        if clip != 0xFFFFFFFF:
-            for mat, ci in clips[clip]:
-                op, _fl, value = commands[ci]
-                if op in (0x80, 0xB3):
-                    if value >= part_count:
-                        return None
-                    parts.append((value, mat))
-        out.append({'name': name, 'matrix': matrix, 'clip': clip, 'flags': flags, 'parts': parts})
-        p += 204 + 4 * ranges
+        out.append(rec)
+        p += rec['size']
     return out

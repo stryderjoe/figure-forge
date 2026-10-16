@@ -62,7 +62,7 @@ def main(argv):
                     shown = page.js("document.body.innerText.slice(0, 300)") or ''
                 except Exception:
                     shown = ''
-                print('  failed:', str(e)[:200], '| page says:', str(shown).replace(chr(10), ' / '), flush=True)
+                print('  failed:', ascii(str(e)[:200]), '| page says:', ascii(str(shown).replace(chr(10), ' / ')), flush=True)
                 im = Image.new('RGB', (320, 400), (60, 20, 20))
                 ImageDraw.Draw(im).text((8, 30), str(e)[:200], fill=(255, 200, 200))
             ImageDraw.Draw(im).text((6, 6), item, fill=(255, 255, 0))

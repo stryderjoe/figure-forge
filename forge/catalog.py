@@ -23,13 +23,14 @@ GAMES = OrderedDict((
     ('tcs', 'LEGO Star Wars: The Complete Saga'),
     ('lb2', 'LEGO Batman 2: DC Super Heroes'),
     ('lmsh', 'LEGO Marvel Super Heroes'),
+    ('pirates', 'LEGO Pirates of the Caribbean (experimental: figures incomplete)'),
 ))
 # games that share file formats form one era (a mode of the program)
 ERAS = OrderedDict((
     ('classic', {'title': 'Classic (2007 to 2008)', 'games': ['lb1', 'indy', 'tcs']}),
-    ('nxg', {'title': 'Super-hero era (2012 to 2013)', 'games': ['lb2', 'lmsh']}),
+    ('nxg', {'title': 'Super-hero era (2011 to 2013)', 'games': ['pirates', 'lb2', 'lmsh']}),
 ))
-MODERN = {'lb2', 'lmsh'}
+MODERN = {'pirates', 'lb2', 'lmsh'}
 
 
 def era_of(game_id):
@@ -64,6 +65,8 @@ def guess_game(root):
     figs = classic.listing(os.path.join(chars, names['minifigs'])) if 'minifigs' in names else {}
     if 'ironman' in figs or 'spiderman' in figs or 'hulk' in figs:
         return 'lmsh'
+    if 'jacksparrow' in figs or 'barbossa' in figs:
+        return 'pirates'
     if 'batman' in figs:
         return 'lb2'
     return None
@@ -247,7 +250,8 @@ def parts(char):
                 common = char.common[part['bone']]
                 slot = rigid_slot(layer['name'], common)
                 same_bone = sum(1 for q in layer['parts'][:p_i] if q['kind'] == 'rigid' and q['bone'] == part['bone'])
-                pid = f'{char.id}|{layer["index"]}|r{part["bone"]}' + (f'.{same_bone}' if same_bone else '')
+                pid = f'{char.id}|{layer["index"]}|r{part["bone"]}' + (
+                    f'.{same_bone}' if same_bone and hasattr(char, 'layer_choice') else '')
                 out.append({'id': pid, 'slot': slot, 'label': label,
                             'layer': layer['index'], 'kind': 'rigid', 'bone': common, 'part': p_i,
                             'default': default})

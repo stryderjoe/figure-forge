@@ -134,7 +134,10 @@ def main():
             const r = tiles.getBoundingClientRect();
             const tile = [...tiles.querySelectorAll('.tile')].find(t => { const b = t.getBoundingClientRect(); return b.top > r.top && b.bottom < r.bottom && !t.classList.contains('on'); });
             tile.click();
-            await new Promise(r => setTimeout(r, 2500));
+            // wait for the part to be fitted (up to 10 s), not a fixed time
+            for (let i = 0; i < 40 && (tile.classList.contains('loading') || !FF.S.parts.some(p => p.id === tile.dataset.id)); i++)
+              await new Promise(r => setTimeout(r, 250));
+            await new Promise(r => setTimeout(r, 300));
             const after = document.querySelector('#panel .tiles').scrollTop;
             return { before, after, on: tile.classList.contains('on'), thumbs: tiles.querySelectorAll('img.thumb[src]').length,
                      panelScroll: document.querySelector('#panel').scrollHeight <= document.querySelector('#panel').clientHeight + 1,

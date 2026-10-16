@@ -23,6 +23,9 @@ import struct
 MARK = bytes([11, 0, 0, 0]) + b'StreamInfo' + bytes([0])
 
 
+LAYOUT = {25: (3, 4), 24: (5, 4), 22: (5, 2)}       # stream version -> (object header bytes, list count bytes), measured
+
+
 class StreamError(ValueError):
     pass
 
@@ -144,6 +147,8 @@ class Stream:
         self.data_at = r.p
         self.strings = []
         self.partial = 0
+        # older streams: a list's count is 2 bytes and an object starts with more bytes (LEGO Pirates: version 22)
+        self.id_size, self.count_size = LAYOUT.get(self.version, (3, 4))
         roots = r.u32()
         self.roots = []
         for _ in range(roots):
@@ -154,7 +159,7 @@ class Stream:
         size, _t, _p, end = r.node('OLST')
         here = chain + (end - size,)
         ci = r.u16()
-        count = r.u32()
+        count = r.u32() if self.count_size == 4 else r.u16()
         objs = []
         for _ in range(count):
             objs.append(self._mobj(r, ci, here))
@@ -167,7 +172,7 @@ class Stream:
         start = end - size
         here = chain + (start,)
         cls = self.classes[ci]
-        obj = {'class': cls['name'], 'id': r.raw(3), 'fields': {}, 'components': {}, 'span': (start, end)}
+        obj = {'class': cls['name'], 'id': r.raw(self.id_size), 'fields': {}, 'components': {}, 'span': (start, end)}
         mark = len(self.strings)
         try:
             for f in cls['fields']:

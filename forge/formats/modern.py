@@ -248,7 +248,7 @@ class Character:
         if root is None:
             raise FormatError(f'{self.name}: empty definition')
         f = root['fields']
-        self.model_path = self._model(f.get('Override Model File') or '', f.get('Skeleton Name') or '')
+        self.model_path = self._model(f.get('Override Model File') or f.get('Model File') or '', f.get('Skeleton Name') or '')
         if not self.model_path:
             raise FormatError(f'{self.name}: model not found')
         try:
@@ -513,6 +513,8 @@ class Character:
         if mesh_index in self._baked:
             return self._baked[mesh_index]
         mesh, _names, i = self._source(mesh_index)
+        if mesh.parts[i].get('short'):
+            return None
         try:
             pos, nrm, uv, col, tris, skin = mesh.geometry(i)
         except (ValueError, struct.error, IndexError):
@@ -586,7 +588,7 @@ class Character:
         for o in (x for r in self.cd.roots for x in ttstream.walk(r)):
             if o['class'] != 'Character Anim Set Reference':
                 continue
-            path = index.get((o['fields'].get('CharAnimSet Name') or '').lower())
+            path = index.get((o['fields'].get('CharAnimSet Name') or o['fields'].get('Name') or '').lower())
             if not path:
                 continue
             try:
