@@ -13,6 +13,7 @@ MESH 48 (LEGO Batman 2), measured on super_minifig_nxg.ghg:
 Attributes: 0 position, 1 normal, 2 colour, 5 uv, 9 skin indices, 10 skin weights.
 Storage: 2 float2, 3 float3, 4 float4, 5 half2, 6 half4, 7 byte4, 8 byte4 (signed/normalised), 9 colour byte4.
 """
+import math
 import struct
 
 SIZES = {2: 8, 3: 12, 4: 16, 5: 4, 6: 8, 7: 4, 8: 4, 9: 4}
@@ -338,6 +339,9 @@ class MeshSection:
         if nrm and attrs[1][1] in (7, 8, 9):
             nrm = [tuple((x - 127.5) / 127.5 for x in v[:3]) for v in nrm]
         uv = col(5)
+        if uv and not all(math.isfinite(x) for t in uv for x in t):
+            # a few models hold half-float NaNs in unused texture coordinates (LEGO Batman 3's faces)
+            uv = [tuple(x if math.isfinite(x) else 0.0 for x in t) for t in uv]
         colour = col(2)
         if colour and self.version == 175:
             colour = [(c[2], c[1], c[0], c[3]) for c in colour]      # LEGO Batman 3 stores colours as BGRA

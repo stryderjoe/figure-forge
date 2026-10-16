@@ -623,6 +623,8 @@ class Character:
             pos, nrm, uv, col, tris, skin = mesh.geometry(i)
         except (ValueError, TypeError, struct.error, IndexError):   # a part whose buffers did not resolve
             return None
+        if any(not -100.0 < x < 100.0 for v in pos for x in v):
+            return None             # read from the wrong buffer (a reference resolved by guess): not drawn
         return pos, nrm or [], [tuple(u[:2]) for u in uv] if uv else [], col, [tuple(t) for t in tris], skin
 
     def material(self, mesh_index):
