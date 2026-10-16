@@ -387,7 +387,7 @@ class Character:
                 self.layer_choice[g.get('Layer Id', g.get('Layer'))] = g.get('Layer Special')
             elif o['class'] == 'Character Attachment':
                 self.attachments.append({k: g.get(k) for k in ('Attachment Name', 'Layer', 'Resource File', 'Locator', 'Tint Colour',
-                                                                'Object Name')})
+                                                                'Object Name', 'Object Offset')})
         mask = f.get('Default Layers')
         # 'Default Layers' is a bitmask of the layers a character shows
         self.default_layers = ({i for i in range(32) if mask >> i & 1} if isinstance(mask, int) and mask > 0 else None)
@@ -473,6 +473,12 @@ class Character:
                 place = list(locators[li]['matrix'])
                 if si in joint_world:
                     place = mat_mul(joint_world[si], place)
+                offset = att.get('Object Offset')
+                if isinstance(offset, (bytes, bytearray)) and len(offset) == 64:
+                    # the definition's own offset comes first (LEGO Marvel's big figures scale their faces by 1.376)
+                    m = list(struct.unpack('<16f', offset))
+                    if any(abs(a - b) > 1e-6 for a, b in zip(m, IDENTITY)) and all(abs(v) < 1e3 for v in m):
+                        place = mat_mul(m, place)
                 parts.append({'special': sp['name'], 'kind': 'rigid', 'bone': locators[li]['joint'],
                               'meshes': sorted(mats), 'mats': mats, 'matrix': place})
             self.layers.append({'index': len(self.layers), 'name': f'TT_{label}', 'chosen': True, 'parts': parts})
