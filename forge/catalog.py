@@ -229,8 +229,11 @@ def parts(char):
         return char._parts
     if hasattr(char, 'layer_choice'):
         # newer era: the body layers 0 to 10 and the ones the definition picks; break-ups and suits are left out
+        dl = char.default_layers
         shown = {L['index'] for L in char.layers
-                 if (L['chosen'] or L['index'] <= 10) and not SKIP_LAYER.search(L['name'])}
+                 if (L['name'].startswith('TT_') or (L['index'] in dl if dl is not None else
+                                                       (L['chosen'] or L['index'] <= 10)))
+                 and not SKIP_LAYER.search(L['name'])}
     else:
         shown = classic.chosen_layers(classic.character_txt(char.path))
     out = []

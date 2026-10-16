@@ -42,9 +42,11 @@ class An3:
             d = d[4:]
         self.tag, self.name = d[:4], name
         self.big_endian = d[:3] == b"ANI"
+        # the newer block layout (ANI-B / ANI-D): LEGO Batman 2 stores some little-endian ('BINA')
+        self.newer = self.big_endian or d[:4] in (b"BINA", b"DINA")
         e = ">" if self.big_endian else "<"
         self.nodes, self.frames, group, self.original_frames, self.curve_count = struct.unpack_from(e + "5H", d, 4)
-        self.channels = self.curve_count if self.big_endian else 9
+        self.channels = self.curve_count if self.newer else 9
         cbase, cscale = struct.unpack_from(e + "ff", d, 28)
         sm, cp, ktp, kp, csf = struct.unpack_from(e + "5I", d, 36)
         if self.self_relative:
@@ -77,7 +79,7 @@ class An3:
         #   .an4: the type itself carries the quantised value: base + (type - 16) * scale (measured: type - 16
         #         equals the matching constants-table entry). 14 = fixed at 0 and 15 = fixed at 1 (measured:
         #         15 appears only on the three scale channels of 9-channel blocks, 14 on translation/rotation).
-        allowed = (6, 7, 14, 15) if self.big_endian else (6,)
+        allowed = (6, 7, 14, 15) if self.newer else (6,)
         unknown = sorted({v for v in self.key_types if v < 16 and v not in allowed})
         if unknown:
             raise ValueError(f"{path}: unhandled key types {unknown}")
@@ -101,7 +103,7 @@ class An3:
             for ch in range(self.channels):
                 kt = self.key_types[node * self.channels + ch]
                 if kt >= 16:
-                    values.append(self.const_base + (kt - 16) * self.const_scale if self.big_endian else self.constants[kt - 16])
+                    values.append(self.const_base + (kt - 16) * self.const_scale if self.newer else self.constants[kt - 16])
                 elif kt == 14:
                     values.append(0.0)
                 elif kt == 15:
@@ -118,20 +120,23 @@ class An4Set:
     the end. Blocks are found by their 'ANID' tag; the set's own header (version 13, total size, counts,
     per-block tables) is not fully decoded, so names are matched to blocks in order where the counts agree."""
 
-    def __init__(self, path):
-        with open(path, "rb") as f:
-            self.data = f.read()
+    def __init__(self, path, data=None):
+        if data is None:
+            with open(path, "rb") as f:
+                data = f.read()
+        self.data = data
         self.version, self.size = struct.unpack_from(">II", self.data, 0)
         (names_at,) = struct.unpack_from(">I", self.data, 16)
         self.names = [n.decode("latin1") for n in self.data[names_at:].split(b"\0") if n]
         self.blocks, self.errors = [], []
-        pos = self.data.find(b"ANID")
-        while pos >= 0:
+        # 'ANID' in LEGO Marvel Super Heroes, 'ANIB' (same block layout) in LEGO Batman 2
+        import re
+        for m in re.finditer(rb"ANI[BD]|[BD]INA", self.data):
+            pos = m.start()
             try:
                 self.blocks.append(An3(path, self.data, pos))
             except Exception as ex:   # keep going: one odd block must not hide the others
                 self.errors.append((pos, str(ex)))
-            pos = self.data.find(b"ANID", pos + 4)
         if len(self.names) == len(self.blocks) + len(self.errors):
             for block, name in zip(self.blocks, self.names):
                 block.name = name

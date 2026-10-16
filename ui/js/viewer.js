@@ -190,6 +190,7 @@ export class Viewer {
     const params = { color: new THREE.Color().setRGB(info.colour[0], info.colour[1], info.colour[2], THREE.SRGBColorSpace),
                      map: info.mapOverride || this.texture(info.texture), side: THREE.FrontSide };
     if (info.alpha) Object.assign(params, { transparent: true, alphaTest: 0.05, depthWrite: true });
+    if (info.vertexColours) params.vertexColors = true;
     const m = flat ? new THREE.MeshBasicMaterial(params) : new THREE.MeshPhongMaterial(params);
     m.name = info.key || 'material';
     m.userData.info = info;
@@ -221,6 +222,7 @@ export class Viewer {
       g.setAttribute('position', new THREE.Float32BufferAttribute(m.position, 3));
       if (m.normal) g.setAttribute('normal', new THREE.Float32BufferAttribute(m.normal, 3));
       if (m.uv) g.setAttribute('uv', new THREE.Float32BufferAttribute(m.uv, 2));
+      if (m.color) g.setAttribute('color', new THREE.Float32BufferAttribute(m.color, 3));
       g.setIndex(m.index);
       if (!m.normal) g.computeVertexNormals();
       const mat = this.materialFor(m.material);

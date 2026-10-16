@@ -22,22 +22,87 @@ IDENTITY = [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0
 SKELETON_MODELS = {'super_minifig': ('minifigs', 'super_characters', 'super_minifig', 'super_minifig_nxg.ghg')}
 
 
+_PAKS = {}
+
+
+def _pak_index(chars_dir):
+    """{set name (lower case): path of its '<set>_an4_nxg.pak'} for a game (cached)."""
+    if chars_dir not in _PAKS:
+        out = {}
+        for dirpath, _dirs, files in os.walk(chars_dir):
+            for f in files:
+                low = f.lower()
+                if low.endswith('_an4_nxg.pak'):
+                    out.setdefault(low[:-len('_an4_nxg.pak')], os.path.join(dirpath, f))
+        _PAKS[chars_dir] = out
+    return _PAKS[chars_dir]
+
+
+_MODELS = {}
+
+
+def _model_index(chars_dir):
+    """{file name (lower case): path} of every model under chars (cached)."""
+    if chars_dir not in _MODELS:
+        out = {}
+        for dirpath, _dirs, files in os.walk(chars_dir):
+            for f in files:
+                low = f.lower()
+                if low.endswith(('_nxg.ghg', '_nxg.gsc')):
+                    out.setdefault(low, os.path.join(dirpath, f))
+        _MODELS[chars_dir] = out
+    return _MODELS[chars_dir]
+
+
+def load_clip(ref):
+    """'<pack path>::<entry name>' -> the animation block for the main skeleton (the one with most nodes)."""
+    from . import an3, pack, ttdeflate
+    path, entry = ref.split('::', 1)
+    with open(path, 'rb') as f:
+        items = pack.read(f.read())[0]
+    data = next(x[2] for x in items if x[0] == entry)
+    if ttdeflate.is_packed(data):
+        data = ttdeflate.decompress(data)
+    blocks = an3.An4Set(ref, data).blocks
+    if not blocks:
+        raise FormatError(f'{entry}: no animation blocks')
+    return max(blocks, key=lambda b: b.nodes)
+
+
 def material_names(d):
-    """Names of the model's materials, in table order."""
+    """Names of the model's materials, in table order. Every material record starts with the word 2 and holds its
+    name (u16 length, text, zero) at one fixed distance from that start, which differs between files: the
+    distance that gives a valid name for most records is the one."""
+    import collections
+    import re
     a = d.find(b'LTMU')
     if a < 0:
         return []
-    b = d.find(b'TDML', a)
     count = struct.unpack_from('>I', d, a + 8)[0]
-    names, p = [], a + 12
-    while p < b - 3 and len(names) < count:
-        n = struct.unpack_from('>H', d, p)[0]
-        if 3 <= n < 120 and d[p + 1 + n] == 0 and all(32 < c < 127 for c in d[p + 2:p + 1 + n]):
-            names.append(d[p + 2:p + 1 + n].decode())
-            p += 2 + n
-        else:
-            p += 1
-    return names
+    b = d.find(b'TDML', a)
+    b = len(d) if b < 0 else b
+    starts = [m.start() + a for m in re.finditer(re.escape(bytes([0, 0, 0, 2])), d[a:b])]
+
+    def name(at):
+        if at + 2 > len(d):
+            return None
+        n = struct.unpack_from('>H', d, at)[0]
+        text = d[at + 2:at + 2 + n]
+        if 3 <= n < 120 and text.endswith(bytes([0])) and re.fullmatch(rb'[A-Za-z_][A-Za-z0-9_:.\- ]+', text[:-1]):
+            return text[:-1].decode()
+        return None
+
+    hits = collections.Counter({k: sum(1 for c in starts if name(c + k)) for k in range(0x200, 0x700)})
+    if not hits:
+        return []
+    k = hits.most_common(1)[0][0]
+    names, last = [], -1
+    for c in starts:
+        nm = name(c + k)
+        if nm and c > last:
+            names.append(nm)
+            last = c + k
+    return names[:count]
 
 
 def _find(root, rel):
@@ -98,11 +163,15 @@ class Character:
             elif o['class'] == 'Character Layer Special':
                 self.layer_choice[g.get('Layer Id')] = g.get('Layer Special')
             elif o['class'] == 'Character Attachment':
-                self.attachments.append({k: g.get(k) for k in ('Attachment Name', 'Layer', 'Resource File', 'Locator',
+                self.attachments.append({k: g.get(k) for k in ('Attachment Name', 'Layer', 'Resource File', 'Locator', 'Tint Colour',
                                                                 'Object Name')})
+        mask = f.get('Default Layers')
+        # 'Default Layers' is a bitmask of the layers a character shows
+        self.default_layers = ({i for i in range(32) if mask >> i & 1} if isinstance(mask, int) and mask > 0 else None)
         self.textures = []          # [path of a .tex], indexed by material()['texture']
         self._tex_index = {}
         self.attached = []          # [(model bytes, MeshSection, material names)] of attachments
+        self.tints = []             # each attachment's tint (hair colour)
         self.layers = self._layers()
         self._attachments()
 
@@ -117,8 +186,16 @@ class Character:
             rel = res.replace('\\', '/').split('/')
             if rel[0].lower() == 'chars':
                 rel = rel[1:]
-            rel[-1] = rel[-1] + '_nxg.ghg'
-            path = _find(self.chars_dir, rel)
+            stem = rel[-1]
+            path = None
+            for ext in ('_nxg.ghg', '_nxg.gsc'):          # hair and hats are scenes (.gsc)
+                rel[-1] = stem + ext
+                path = _find(self.chars_dir, rel) if len(rel) > 1 else None
+                if path:
+                    break
+            if not path:                                   # LEGO Marvel names some by file name alone
+                index = _model_index(self.chars_dir)
+                path = index.get(stem.lower() + '_nxg.ghg') or index.get(stem.lower() + '_nxg.gsc')
             if not path:
                 continue
             try:
@@ -135,11 +212,18 @@ class Character:
                 continue
             k = len(self.attached)
             self.attached.append((d, mesh, material_names(d)))
+            self.tints.append(tuple(att.get('Tint Colour') or (1.0, 1.0, 1.0)))
             base = 100000 * (k + 1)
-            sp = disp['specials'][0]          # the first is the most detailed
-            mats = {base + m: mat for m, mat in sp['parts']}
+            # the object the definition names, else the first (the most detailed)
+            want = (att.get('Object Name') or '').lower()
+            sp = next((x for x in disp['specials'] if want and x['name'].lower() == want), disp['specials'][0])
+            names = self.attached[-1][2]
+            # MAT_OCCLUDE pieces only mask other pieces in the game's renderer: they are not drawn
+            mats = {base + m: mat for m, mat in sp['parts']
+                    if not (mat < len(names) and 'OCCLUDE' in names[mat].upper())}
             self._mesh_mat.update(mats)
-            self.layers.append({'index': len(self.layers), 'name': f'TT_{att.get("Attachment Name") or "Attachment"}',
+            label = att.get('Attachment Name') or stem            # LEGO Marvel leaves the name out: the file's
+            self.layers.append({'index': len(self.layers), 'name': f'TT_{label}',
                                 'chosen': True, 'parts': [{
                                     'special': sp['name'], 'kind': 'rigid', 'bone': locators[li]['joint'],
                                     'meshes': sorted(mats), 'mats': mats, 'matrix': list(locators[li]['matrix'])}]})
@@ -166,6 +250,8 @@ class Character:
         out = []
         for li, layer in enumerate(self.skel['layers']):
             want = self.layer_choice.get(li)
+            if want is not None and want.lower() == 'all':        # every variant of the layer
+                want = None
             entry = {'index': li, 'name': layer['name'], 'parts': [], 'chosen': want is not None}
             for item in layer['items']:
                 sp = specials[item['special']]
@@ -214,6 +300,8 @@ class Character:
         role = name.split(':')[0].upper()
         role = role[:-5] if role.endswith('_GAME') else role
         path = self.role_textures.get(ROLE.get(role))
+        if path is None and role == 'CAPE_INSIDE':
+            path = self.role_textures.get(ROLE['CAPE'])          # no lining of its own: the cape's texture
         tex = -1
         if path:
             tex = self._tex_index.get(path)
@@ -228,8 +316,57 @@ class Character:
                     tex = len(self.textures)
                     self.textures.append(full)
                 self._tex_index[path] = tex
-        return {'index': mi if mi is not None else -1, 'texture': tex, 'colour': (1.0, 1.0, 1.0, 1.0),
+        colour, vc = (1.0, 1.0, 1.0, 1.0), False
+        if tex < 0:
+            # untextured pieces (faces, hair) are coloured by their vertex colours, 128 = full brightness,
+            # times the attachment's tint (a hair colour)
+            geo = self.geometry(mesh_index)
+            vc = bool(geo and geo[3])
+            if mesh_index >= 100000:
+                t = self.tints[mesh_index // 100000 - 1]
+                colour = (t[0], t[1], t[2], 1.0)
+        return {'index': mi if mi is not None else -1, 'texture': tex, 'colour': colour, 'vertex_colours': vc,
                 'name': name}
+
+    def _vertex_colour(self, mesh_index):
+        geo = self.geometry(mesh_index)
+        col = geo[3] if geo else None
+        if not col:
+            return (1.0, 1.0, 1.0, 1.0)
+        n = len(col)
+        avg = [min(1.0, sum(c[k] for c in col) / n * 2 / 255) for k in range(3)]
+        return (avg[0], avg[1], avg[2], 1.0)
+
+    def clip_list(self):
+        """[(clip name, '<pack>::<entry>', fps, action)] from the definition's animation sets."""
+        from . import pack
+        index = _pak_index(self.chars_dir)
+        out, seen = [], set()
+        for o in (x for r in self.cd.roots for x in ttstream.walk(r)):
+            if o['class'] != 'Character Anim Set Reference':
+                continue
+            path = index.get((o['fields'].get('CharAnimSet Name') or '').lower())
+            if not path:
+                continue
+            try:
+                with open(path, 'rb') as f:
+                    items = pack.read(f.read())[0]
+            except (OSError, ValueError, struct.error):
+                continue
+            for item in items:
+                entry = item[0]
+                if not entry.lower().endswith('.an4'):
+                    continue
+                name = entry[:-4]
+                for tail in ('_def_nxg', '_nxg'):
+                    if name.lower().endswith(tail):
+                        name = name[:-len(tail)]
+                        break
+                if name.lower() in seen:
+                    continue
+                seen.add(name.lower())
+                out.append((name, f'{path}::{entry}', 30.0, None))
+        return out
 
     def has_texture(self, index):
         return 0 <= index < len(self.textures)

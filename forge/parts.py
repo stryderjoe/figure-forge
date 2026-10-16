@@ -55,6 +55,7 @@ def material_json(game_id, char, mesh_index):
     m = char.material(mesh_index)
     if m is None:
         return {'colour': [0.8, 0.8, 0.8, 1.0], 'texture': None, 'alpha': False}
+    vc = bool(m.get('vertex_colours'))
     tex = m['texture']
     has = char.has_texture(tex)
     # see-through where the texture has alpha (DXT3 / DXT5 / 32-bit); the material word at +0x40 is not a
@@ -63,7 +64,8 @@ def material_json(game_id, char, mesh_index):
     return {'colour': [round(float(c), 4) for c in m['colour'][:4]],
             'texture': f'/api/texture?char={char.id}&index={tex}' if has else None,
             'alpha': fmt.startswith(('DXT3', 'DXT5', 'A8R8G8B8')),
-            'key': f'{char.id}#{m["index"]}'}
+            'vertexColours': vc,
+            'key': f'{char.id}#{m["index"]}' + (f'@{mesh_index}' if vc else '')}
 
 
 def _pack(mesh):
@@ -87,7 +89,11 @@ def part_json(game, part_id, base, model_space=False):
         geo = donor.geometry(mi)
         if geo is None or not geo[4]:
             continue
-        pos, nrm, uv, _col, tris, weights = geo
+        pos, nrm, uv, col, tris, weights = geo
+        mat = material_json(game.id, donor, mi)
+        # vertex colours (newer era: 128 = full brightness)
+        vcol = (np.clip(np.asarray([c[:3] for c in col], dtype=np.float64) * 2 / 255, 0, 1)
+                if mat.get('vertexColours') and col and len(col) == len(pos) else None)
         p = np.c_[np.asarray(pos, dtype=np.float64), np.ones(len(pos))] @ placed
         n = np.asarray(nrm, dtype=np.float64) @ placed[:3, :3] if len(nrm) == len(pos) else None
         t = np.asarray(tris, dtype=np.int64)
@@ -120,6 +126,7 @@ def part_json(game, part_id, base, model_space=False):
             t = remap[t]
             p = p[used]
             n = n[used] if n is not None else None
+            vcol = vcol[used] if vcol is not None else None
             uv = [uv[i] for i in used] if len(uv) == len(pos) else []
             w = [weights[i] for i in used] if weights else [[] for _ in used]
             moved = np.zeros((len(used), 3))
@@ -159,7 +166,9 @@ def part_json(game, part_id, base, model_space=False):
             uvs[:, 1] = 1.0 - uvs[:, 1]
             out['uv'] = uvs
         out['index'] = t[:, [0, 2, 1]].astype(np.int64)      # the mirror reverses the winding
-        out['material'] = material_json(game.id, donor, mi)
+        out['material'] = mat
+        if vcol is not None:
+            out['color'] = vcol
         out['mesh'] = mi
         meshes.append(_pack(out))
     return {'id': part_id, 'slot': info['slot'], 'label': info['label'], 'kind': info['kind'], 'meshes': meshes}

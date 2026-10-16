@@ -20,6 +20,9 @@ HalfVec3 6; ClassObject: u8 present, then (if 1) str class name and a MOBJ node 
 import struct
 
 
+MARK = bytes([11, 0, 0, 0]) + b'StreamInfo' + bytes([0])
+
+
 class StreamError(ValueError):
     pass
 
@@ -88,7 +91,13 @@ class Stream:
 
     def __init__(self, data):
         self.data = data
-        r = Reader(data)
+        start = 0
+        if data[4:8] == b'.CC4':
+            # LEGO Marvel Super Heroes wraps the stream in a resource header (the files it depends on)
+            start = data.find(MARK) - 4
+            if start < 0:
+                raise StreamError('no stream after the resource header')
+        r = Reader(data, start)
         _s, _t, _p, end = r.node('StreamInfo')
         self.version = r.u32()
         r.p = end

@@ -263,6 +263,9 @@ def declared_clips(model_path):
 
 
 def load_clip(path):
+    if '::' in path:                      # newer era: an animation inside a pack (see modern.py)
+        from . import modern
+        return modern.load_clip(path)
     try:
         return An3(path)
     except (ValueError, struct.error, IndexError, OSError) as e:

@@ -35,7 +35,8 @@ def _quat(r):
 def clip_list(char):
     """Clips the character's .txt declares: [{name, file, fps, action}] (fps None = not given)."""
     out = []
-    for name, path, fps, action in classic.declared_clips(char.path):
+    declared = char.clip_list() if hasattr(char, 'clip_list') else classic.declared_clips(char.path)
+    for name, path, fps, action in declared:
         out.append({'name': name, 'file': path, 'fps': fps, 'action': action})
     return out
 
@@ -48,9 +49,17 @@ def clip_list(char):
 BIND_RELATIVE = {'tcs'}
 
 
-def node_matrix(char, j, values):
+def node_matrix(char, j, values, flags=0):
     """Viewer-space local matrix of bone j of `char` from one node's channels, by its game's rule."""
     m = np.asarray(classic.channel_matrix(values), dtype=np.float64).reshape(4, 4)
+    if hasattr(char, 'skel'):
+        # newer era: as in the classic games the channels are already in the mirrored (viewer) space; a node
+        # flagged 0x20 turns by its rotation after the joint's orientation (row vectors: R x orient)
+        if flags & 0x20 and j < len(char.skel['joints']):
+            o = skeleton.mirror(char.skel['joints'][j]['orient'])
+            o3, _ = _rot(o)
+            m[:3, :3] = m[:3, :3] @ o3
+        return m
     if char.id.split(':', 1)[0] in BIND_RELATIVE and j < len(char.bones):
         bind, _ = _rot(skeleton.mirror(char.bones[j]['bind_local']))
         scale = np.linalg.norm(m[:3, :3], axis=1)
@@ -95,7 +104,8 @@ def retarget_json(owner, target, path, fps=None):
     frames = []
     for f in range(clip.frames):
         pose = clip.pose(f)
-        loc = [node_matrix(owner, j, pose[j]) if j < nodes else o_bind[j]
+        nf = getattr(clip, 'node_flags', None) or []
+        loc = [node_matrix(owner, j, pose[j], nf[j] if j < len(nf) else 0) if j < nodes else o_bind[j]
                for j in range(len(owner.bones))]
         frames.append(_fk(loc, owner.bones))
     tracks = []
@@ -124,7 +134,8 @@ def retarget_json(owner, target, path, fps=None):
             prev = quat
             q += quat.tolist()
             if target.common[j] in ('root', 'pelvis'):
-                own_local = node_matrix(owner, i, clip.pose(f)[i])
+                nf = getattr(clip, 'node_flags', None) or []
+                own_local = node_matrix(owner, i, clip.pose(f)[i], nf[i] if i < len(nf) else 0)
                 t += (own_local[3, :3] * ratio).tolist()
             else:
                 t += t_bind[j][3, :3].tolist()
@@ -146,7 +157,8 @@ def clip_json(char, path, fps=None):
         prev = None
         for pose in poses:
             v = pose[j]
-            m = node_matrix(char, j, v)
+            nf = getattr(clip, 'node_flags', None) or []
+            m = node_matrix(char, j, v, nf[j] if j < len(nf) else 0)
             scale = np.linalg.norm(m[:3, :3], axis=1)
             r = m[:3, :3] / np.where(scale > 1e-9, scale, 1.0)[:, None]
             if (scale <= 1e-9).any():

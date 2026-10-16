@@ -205,3 +205,22 @@ class MeshSection:
         idx = struct.unpack_from(fmt, d, ib['start'] + part['first_index'] * ib['stride'])
         tris = [idx[k:k + 3] for k in range(0, len(idx), 3)]
         return pos, nrm, uv, colour, tris, skin
+
+
+def morph_offsets(section, part_index):
+    """{target id: [(dx, dy, dz)] per vertex} of a part's blend shapes (facial expressions).
+    Run-length records are 16 bytes: u32 vertex count, 3f offset shared by those vertices."""
+    d, part = section.d, section.parts[part_index]
+    n = part['vertex_count']
+    out = {}
+    for target, kind, at, size in part.get('morphs', ()):
+        offs = []
+        if kind == 'dense':
+            offs = [struct.unpack_from('>3f', d, at + 12 * i) for i in range(size)]
+        else:
+            for p in range(at, at + size, 16):
+                count = struct.unpack_from('>I', d, p)[0]
+                offs.extend([struct.unpack_from('>3f', d, p + 4)] * count)
+        if len(offs) == n:
+            out[target] = offs
+    return out
