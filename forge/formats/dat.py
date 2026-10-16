@@ -73,6 +73,8 @@ class DatArchive:
         # -6: LEGO Batman 3: Beyond Gotham (2014): 12-byte name records {i16 next, i16 prev, i32 name offset,
         # i16 parent, i16 0}: the parent is given (record 0 is the root); a file's next is minus its file number.
         # The file offset is (off_hi << 8) | (flags >> 24); flags & 0xff is the compression (0 or 2 seen).
+        # After the names: the sorted path hashes (a file's number is its place), 24 zero bytes, and two tables
+        # of per-file MD5s (of the unpacked and of the stored data); see datwrite.read_index6.
         rec_size = {-1: 8, -2: 8, -3: 8, -4: 8, -5: 12, -6: 12}.get(self.version)
         if rec_size is None:
             raise ValueError(f"{path}: index version {self.version} not handled (-1 to -6 verified)")

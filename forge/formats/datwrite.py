@@ -199,3 +199,111 @@ def build_index_linked(info, old_paths, files):
     out += struct.pack('<i', len(names)) + bytes(names)
     out += b''.join(struct.pack('<I', path_hash(p)) for p in listed) + b'\0' * 8
     return bytes(out)
+
+
+def read_index6(info):
+    """Index -6 (LEGO Batman 3), measured on its four archives: as -5 (12-byte name records), but each record
+    also names its parent {i16 next, i16 prev, i32 name, i16 parent, i16 0}, so records need not be depth first;
+    after the names (whose table ends with a few zero bytes): the sorted path hashes (file numbers are places in
+    that order), 24 zero bytes, 'ROTV' with the file count (big-endian) and each file's MD5 of its unpacked data
+    in file order, then 'ROTV', the count and each file's MD5 of its stored (packed) data.
+    Returns {'records', 'names', 'pad', 'files': [(off_hi, zsize, size, flags)], 'zeros', 'md5': [(unpacked,
+    stored)], 'paths': [path by file number]}."""
+    version, count = struct.unpack_from('<ii', info, 0)
+    if version != -6:
+        raise ValueError('not an index -6')
+    files = [struct.unpack_from('<IIII', info, 8 + 16 * i) for i in range(count)]
+    pos = 8 + 16 * count
+    (nrec,) = struct.unpack_from('<i', info, pos)
+    recs = [list(struct.unpack_from('<hhihh', info, pos + 4 + 12 * i)) for i in range(nrec)]
+    pos += 4 + 12 * nrec
+    (nsz,) = struct.unpack_from('<i', info, pos)
+    names = bytes(info[pos + 4:pos + 4 + nsz])
+    pos += 4 + nsz
+    used = max(r[2] for r in recs[1:])
+    pad = nsz - (names.index(b'\0', used) + 1)
+    hashes = struct.unpack_from(f'<{count}I', info, pos)
+    pos += 4 * count
+    zeros = info[pos:pos + 24]
+    pos += 24
+    md5 = []
+    tables = []
+    for _ in range(2):
+        if info[pos:pos + 4] != b'ROTV' or struct.unpack_from('>I', info, pos + 4)[0] != count:
+            raise ValueError('index -6: MD5 table not where expected')
+        tables.append([info[pos + 8 + 16 * i:pos + 24 + 16 * i] for i in range(count)])
+        pos += 8 + 16 * count
+    if pos != len(info):
+        raise ValueError(f'index -6: {len(info) - pos} bytes after the MD5 tables')
+    md5 = list(zip(tables[0], tables[1]))
+
+    def name(off):
+        return names[off:names.index(b'\0', off)].decode('latin1')
+    full = [''] * nrec
+    paths = [None] * count
+    for i, (nxt, _prev, noff, parent, _z) in enumerate(recs):
+        if i == 0:
+            continue
+        full[i] = f'{full[parent]}\\{name(noff)}' if parent > 0 else name(noff)
+        if nxt <= 0:
+            paths[-nxt] = full[i]
+    for i, p in enumerate(paths):
+        if p is None or path_hash(p) != hashes[i]:
+            raise ValueError(f'index -6: file {i} is not in hash order')
+    return {'records': recs, 'names': names[:nsz - pad], 'pad': pad, 'files': files, 'zeros': zeros,
+            'md5': md5, 'paths': paths, 'full': full}
+
+
+def build_index6(ix, files, md5):
+    """Index -6 from read_index6's parts with files added or changed. files: {path: (off_hi, zsize, size, flags)}
+    for every file, old and new; md5: {path: (unpacked, stored)} for every file. New names go after the
+    archive's own records (each record names its parent, so the order is free); a folder's next is its last
+    child, a new child's prev the child before it. File numbers are places in the table sorted by path hash."""
+    recs = [list(r) for r in ix['records']]
+    names = bytearray(ix['names'])
+    listed = sorted(files, key=path_hash)
+    place = {p.lower(): i for i, p in enumerate(listed)}
+    full = list(ix['full'])
+    dirs = {'': 0}
+    for i, r in enumerate(recs):
+        if i and r[0] > 0:
+            dirs[full[i].lower()] = i
+    known = set()
+    for i, r in enumerate(recs):
+        if i and r[0] <= 0 and full[i].lower() in place:
+            r[0] = -place[full[i].lower()]
+            known.add(full[i].lower())
+
+    def add(parent, name, nxt):
+        at = len(names)
+        names.extend(name.encode('latin1') + b'\0')
+        last = recs[parent][0]
+        prev = last if last > 0 else 0
+        recs.append([nxt, prev, at, parent if parent else 0, 0])
+        recs[parent][0] = len(recs) - 1
+        return len(recs) - 1
+
+    for path in listed:
+        if path.lower() in known:
+            continue
+        parts = path.split('\\')
+        cur, here = '', 0
+        for d in parts[:-1]:
+            cur = f'{cur}\\{d}' if cur else d
+            if cur.lower() not in dirs:
+                dirs[cur.lower()] = add(here, d, 0)
+            here = dirs[cur.lower()]
+        add(here, parts[-1], -place[path.lower()])
+    out = bytearray(struct.pack('<ii', -6, len(listed)))
+    for p in listed:
+        out += struct.pack('<IIII', *files[p])
+    out += struct.pack('<i', len(recs))
+    for r in recs:
+        out += struct.pack('<hhihh', *r)
+    names += b'\0' * ix['pad']
+    out += struct.pack('<i', len(names)) + bytes(names)
+    out += b''.join(struct.pack('<I', path_hash(p)) for p in listed)
+    out += ix['zeros']
+    for k in range(2):
+        out += b'ROTV' + struct.pack('>I', len(listed)) + b''.join(md5[p][k] for p in listed)
+    return bytes(out)

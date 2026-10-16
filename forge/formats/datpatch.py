@@ -78,7 +78,9 @@ def write_files(dat_path, files):
         info_off, info, version, count = _index(f)
         raw = [struct.unpack_from('<IIII', info, 8 + 16 * i) for i in range(count)]
         table = {paths[i]: raw[i] for i in range(count)}
-        order, _full, _recs, _dirs = datwrite.read_tree(info)
+        ix6 = datwrite.read_index6(info) if version == -6 else None
+        order = None if ix6 else datwrite.read_tree(info)[0]
+        md5 = {paths[i]: ix6['md5'][i] for i in range(count)} if ix6 else None
         replaced, added = [], []
         for path, data in files.items():
             path = path.replace('/', '\\')
@@ -89,14 +91,23 @@ def write_files(dat_path, files):
             f.write(data)
             key = by_lower.get(path.lower())
             if key:
-                # -4 (LEGO Batman 2) keeps something unknown in the flags' second and third bytes: kept as it is
-                flags = table[key][3] & (0xFFFFFF00 if version in (-4, -5) else 0xFFFF0000)
+                # -4 (LEGO Batman 2) keeps something unknown in the flags' second and third bytes: kept as it is;
+                # -6 (LEGO Batman 3) holds the offset's low byte in the top byte (0 on a 2 KB boundary)
+                keep = {-4: 0xFFFFFF00, -5: 0xFFFFFF00, -6: 0x00FFFF00}.get(version, 0xFFFF0000)
+                flags = table[key][3] & keep
                 table[key] = (offset >> 8, len(data), len(data), flags)
                 replaced.append(key)
             else:
+                key = path
                 table[path] = (offset >> 8, len(data), len(data), 0)
                 added.append(path)
-        if version in (-4, -5):
+            if md5 is not None:
+                import hashlib
+                digest = hashlib.md5(data).digest()
+                md5[key] = (digest, digest)                     # stored: the same bytes unpacked and packed
+        if ix6:
+            new_info = datwrite.build_index6(ix6, table, md5)
+        elif version in (-4, -5):
             new_info = datwrite.build_index_linked(info, paths, table)
         else:
             new_info = datwrite.build_index(version, table, order)
