@@ -563,6 +563,7 @@ class Character:
                               'meshes': sorted(mats), 'mats': mats, 'matrix': place})
             self.layers.append({'index': len(self.layers), 'name': f'TT_{label}', 'chosen': True, 'parts': parts,
                                 'from_layer': att.get('Layer')})
+            self._note_material_order(k, [mat for part in parts for mat in part['mats'].values()])
 
     def _sub_attachment(self, att, stem):
         """An attachment that is a definition (a cape, skinned hair): its visible pieces, skinned to its own
@@ -624,6 +625,7 @@ class Character:
             self.attachment_roles.pop(k, None)
             return
         self._mesh_mat.update(mats)
+        self._note_material_order(k, list(mats.values()))
         self.layers.append({'index': len(self.layers), 'name': f'TT_{att.get("Attachment Name") or stem}',
                             'chosen': True, 'parts': [{'special': stem, 'kind': 'rigid', 'bone': locators[li]['joint'],
                                                        'meshes': meshes, 'mats': mats,
@@ -786,6 +788,34 @@ class Character:
             return out or first
         return first
 
+    def _note_material_order(self, k, mats):
+        """The materials of attachment k in the order its shown pieces use them. An attachment's own definition
+        numbers materials this way, it seems: material 1 is the first one used (face_batmannew52.cd's black
+        material 1 is the cowl, the face model's material 3, worn by its first piece; wingsarchangel.cd's
+        material 1 is the feathers, the wing model's material 0). Inferred from these two; not confirmed."""
+        order = []
+        for m in mats:
+            if m not in order:
+                order.append(m)
+        self._att_order = getattr(self, '_att_order', {})
+        self._att_order[k] = order
+
+    def _own_number(self, mesh_index, mi):
+        """The number an attachment's own definition gives material mi (see _note_material_order)."""
+        order = getattr(self, '_att_order', {}).get(mesh_index // 100000 - 1)
+        if not order or mi not in order:
+            return mi + 1
+        # a ':VARIANT_...' copy shares its material's number
+        names = self._source(mesh_index)[1]
+
+        def base(i):
+            return names[i].split(':')[0].lower() if 0 <= i < len(names) else i
+        bases = []
+        for m in order:
+            if base(m) not in bases:
+                bases.append(base(m))
+        return bases.index(base(mi)) + 1
+
     def _own_roles(self, stem):
         """{material number: texture path or ('material', remap file, material)} from an attachment's own
         definition (LEGO Marvel's wingsarchangel.cd), or {}."""
@@ -804,6 +834,9 @@ class Character:
             elif o['class'] == 'Character Material' and g.get('Source Material Resource File'):
                 roles.setdefault(g.get('Material'), ('material', g['Source Material Resource File'],
                                                      g.get('Source Material') or ''))
+            elif o['class'] == 'Character Material' and isinstance(g.get('Layer 1 Tint Colour'), tuple):
+                # a colour for a plain piece (face_batmannew52.cd: material 1, the cowl, black)
+                roles[('tint', g.get('Material'))] = g['Layer 1 Tint Colour']
         return roles
 
     def _attachment_tint(self, att, stem):
@@ -906,7 +939,8 @@ class Character:
         if own_roles:
             # an attachment's own definition numbers its model's materials from 1 (wingsarchangel.cd: material 1,
             # the feathers, wears MAT_ARCHANGELMETAL; facetex_*.cd: material 1, FaceTex_MAT, the face print)
-            key = mi + 1 if mi is not None and mi + 1 in own_roles else ROLE.get(role)
+            num = self._own_number(mesh_index, mi) if mi is not None else None
+            key = num if num in own_roles else ROLE.get(role)
             if key in own_roles:
                 path = own_roles[key]
         if path is None and role == 'CAPE_INSIDE':
@@ -953,8 +987,12 @@ class Character:
         if tint is not None and not vc:
             colour = (tint[0], tint[1], tint[2], 1.0)
         if mesh_index >= 100000:
-            # an attachment's tint (hair colour, a cape's colour) multiplies its texture or vertex colours
+            # an attachment's tint (hair colour, a cape's colour) multiplies its texture or vertex colours, and so
+            # does a colour its own definition gives the material
             t = self.tints[mesh_index // 100000 - 1]
+            own = (own_roles or {}).get(('tint', self._own_number(mesh_index, mi))) if mi is not None else None
+            if own is not None:
+                t = (t[0] * own[0], t[1] * own[1], t[2] * own[2])
             colour = (t[0], t[1], t[2], 1.0)
         # vertex colours are sRGB; LEGO Batman 2 stores them at half strength (128 = full), LEGO Marvel at full
         owner_mesh = self.attached[mesh_index // 100000 - 1].mesh if mesh_index >= 100000 else self.mesh
