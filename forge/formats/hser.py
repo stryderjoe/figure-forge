@@ -266,3 +266,77 @@ def model_paths(stem_dir, stem, game):
         return [(base + '_nxg.ghg', 2, 0xA0000DBF, 2, 0), (base + '_dx11.ghg', 2, 0x40000DBF, 2, 0)]
     return [(base + '_nxg.ghg', 2, 0x8001EDBF, 2, 0), (base + '_dx11.ghg', 2, 0x4001EDBF, 2, 0),
             (base + '_mob.ghg', 2, 0x2001EDBF, 2, 0)]
+
+
+def entries(h):
+    """The header's records as (type, 'folder/.../file', platforms, usage, parameter, extra bytes), in order."""
+    ps = paths(h) if h['tree'] else {}
+    return [(r['type'], ps.get(r['node'], '').lstrip('/'), r['platforms'], r['usage'], r['param'], r['extra'])
+            for r in h['records']]
+
+
+def pc_resources(own, lookup):
+    r"""LEGO Batman 3's '<file>.res': what the PC game loads with a file, worked out from its own records the way
+    the build does (reproduces every one of the game's 4563 .res files, records and bytes).
+
+    Each record for the PC (platforms with bit 0x40000000 and bit 0x20) brings in, before itself, the PC records
+    (extra bytes kept) of the file it names (lookup(path) -> that file's own records, or None) whose usage is 0 or shares a bit with
+    the record's parameter, and so on down; everything brought in takes the usage of the top record. A record met
+    again (same type, path and parameter) is kept where it was first met, its usage gaining the new bits."""
+    out, index = [], {}
+
+    def pc(platforms):
+        return platforms & 0x40000000 and platforms & 0x20
+
+    def add(e):
+        k = (e[0], e[1], e[4])
+        if k in index:
+            o = out[index[k]]
+            out[index[k]] = o[:3] + (o[3] | e[3],) + o[4:]
+        else:
+            index[k] = len(out)
+            out.append(e)
+
+    def visit(e, usage, depth):
+        if depth > 16:
+            raise HserError(f'dependencies of {e[1]} nest too deep')
+        for s in lookup(e[1]) or ():
+            if pc(s[2]) and (s[3] == 0 or s[3] & e[4]):
+                visit(s, usage, depth + 1)
+                add(s[:3] + (usage,) + s[4:])
+
+    for e in own:
+        if pc(e[2]):
+            visit(e, e[3], 0)
+            add(e)
+    return out
+
+
+def build(records, like):
+    """A header listing records ((type, path, platforms, usage, parameter, extra bytes), in order) with the version, root word,
+    unknown word and bookkeeping of the header like (a dict from read). The tree is laid out as the build lays a
+    .res file's out: each folder's children in the reverse of the order they are first met in the records."""
+    kids, nodes, at = [[]], [dict(like['nodes'][0]) if like['tree'] else
+                             {'a': 0, 'b': 0, 'root': 0, 'parent': 0xFFFF, 'name': ''}], {}
+    file_node = {}
+    for _t, path, *_ in records:
+        if path in file_node:
+            continue
+        parts = path.split('/')
+        cur = 0
+        for k, part in enumerate(parts):
+            last = k == len(parts) - 1
+            key = (cur, part, last)
+            if key not in at:
+                at[key] = len(nodes)
+                nodes.append({'a': 0, 'b': 0, 'name': part, 'parent': cur, 'file': last})
+                kids.append([])
+                kids[cur].insert(0, at[key])
+            cur = at[key]
+        file_node[path] = cur
+    h = {'version': like['version'], 'tree': True, 'one': like.get('one', 1), 'nodes': nodes, 'files': 0,
+         'unknown': like.get('unknown', 0), 'wide': like.get('wide', True), 'rest': like['rest'],
+         'records': [{'type': t, 'node': file_node[p], 'extra': x, 'platforms': pl, 'usage': u, 'param': pa}
+                     for t, p, pl, u, pa, x in records]}
+    rebuild(h, kids)
+    return write(h)
