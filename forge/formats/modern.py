@@ -463,7 +463,7 @@ class Character:
             chosen = named or ingame or first or specials[:1]
             # a rigid piece of the attachment sits on a joint of its own skeleton: its vertices are in that
             # joint's frame, so the joint's bind position comes first, then the locator
-            joint_world, mentioned = {}, set()
+            joint_world, mentioned, skinned_sp = {}, set(), set()
             for sk in am.skeletons:                  # one copy per detail level, each naming its own pieces
                 worlds = []
                 for j in sk['joints']:
@@ -477,6 +477,8 @@ class Character:
                     mentioned.add(item['special'])
                     if item['kind'] == 0 and item['joint'] < len(worlds):
                         joint_world[item['special']] = worlds[item['joint']]
+                    elif item['kind'] != 0:
+                        skinned_sp.add(item['special'])
             label = att.get('Attachment Name') or stem            # LEGO Marvel leaves the name out: the file's
             parts = []
             for sp in chosen:
@@ -485,15 +487,20 @@ class Character:
                 self._mesh_mat.update(mats)
                 si = specials.index(sp)
                 place = list(locators[li]['matrix'])
+                bone = locators[li]['joint']
                 if si in joint_world:
                     place = mat_mul(joint_world[si], place)
+                elif si in skinned_sp:
+                    matched = self._match_joint(am, base, mats)
+                    if matched is not None:
+                        bone, place = matched
                 offset = att.get('Object Offset')
                 if isinstance(offset, (bytes, bytearray)) and len(offset) == 64:
                     # the definition's own offset comes first (LEGO Marvel's big figures scale their faces by 1.376)
                     m = list(struct.unpack('<16f', offset))
                     if any(abs(a - b) > 1e-6 for a, b in zip(m, IDENTITY)) and all(abs(v) < 1e3 for v in m):
                         place = mat_mul(m, place)
-                parts.append({'special': sp['name'], 'kind': 'rigid', 'bone': locators[li]['joint'],
+                parts.append({'special': sp['name'], 'kind': 'rigid', 'bone': bone,
                               'meshes': sorted(mats), 'mats': mats, 'matrix': place})
             self.layers.append({'index': len(self.layers), 'name': f'TT_{label}', 'chosen': True, 'parts': parts,
                                 'from_layer': att.get('Layer')})
@@ -581,6 +588,38 @@ class Character:
                                                        'meshes': meshes, 'mats': mats,
                                                        'matrix': list(locators[li]['matrix'])}],
                             'from_layer': att.get('Layer')})
+
+    def _match_joint(self, am, base, mats):
+        """A skinned attachment piece whose skeleton copies the character's joints as '<joint>_match' (LEGO Batman
+        3's Killer Croc head, LEGO Marvel's Venom backpack): its vertices are in the character's model space. It
+        rides the character joint named by the nearest '_match' joint above its most weighted one: (bone, matrix),
+        or None."""
+        import numpy as np
+        if not am.skeletons:
+            return None
+        joints = am.skeletons[0]['joints']
+        weight = {}
+        for mi in mats:
+            geo = self.geometry(mi)
+            for ws in (geo[5] or []) if geo else []:
+                for j, w in ws or ():
+                    weight[j] = weight.get(j, 0.0) + w
+        if not weight:
+            return None
+        j = max(weight, key=weight.get)
+        names = {b['name'].lower(): i for i, b in enumerate(self.bones)}
+        worlds = []
+        for jt in joints:
+            m = list(jt['bind'])
+            worlds.append(m if jt['parent'] is None else mat_mul(m, worlds[jt['parent']]))
+        while j is not None and 0 <= j < len(joints):
+            name = joints[j]['name'].lower()
+            if name.endswith('_match') and name[:-6] in names:
+                # into the '_match' joint's own frame, which the character's joint of that name carries
+                inv = np.linalg.inv(np.asarray(worlds[j], dtype=np.float64).reshape(4, 4))
+                return names[name[:-6]], [float(v) for v in inv.ravel()]
+            j = joints[j]['parent']
+        return None
 
     def _attachment_tint(self, att, stem):
         """The attachment's tint times that of a definition of the same name beside its model (LEGO Batman 3's
