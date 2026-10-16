@@ -98,7 +98,7 @@ def _record(d, p, end, names, clips, commands, part_count, i, strict=False):
         return None
     if names is not None:
         # a name starts at a string boundary of the name table
-        if strict and (off > 0x100000 or (off and d[names + off - 1] != 0)):
+        if strict and (off > 0x100000 or names + off > len(d) or (off and d[names + off - 1] != 0)):
             return None
         e = d.find(bytes([0]), names + off, names + off + 256)
         if e < 0:
