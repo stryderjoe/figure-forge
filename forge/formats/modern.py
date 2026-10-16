@@ -39,6 +39,44 @@ def _pak_index(chars_dir):
 
 
 _MODELS = {}
+_LOADED = {}
+
+
+class Model:
+    """One model file, parsed once and shared (every minifig of a game uses the same base model).
+    Material names are read on first use."""
+
+    def __init__(self, path):
+        self.path = path
+        with open(path, 'rb') as f:
+            self.d = f.read()
+        self.mesh = nxgmesh.MeshSection(self.d)
+        self.disp = nxgdisp.read(self.d, len(self.mesh.parts))
+        self._skels = None
+        self._names = None
+
+    @property
+    def skeletons(self):
+        if self._skels is None:
+            self._skels = nxgskel.read_all(self.d)
+        return self._skels
+
+    @property
+    def material_names(self):
+        if self._names is None:
+            self._names = material_names(self.d)
+        return self._names
+
+
+def model(path):
+    """The parsed model at path (the last 48 used are kept)."""
+    m = _LOADED.pop(path, None)
+    if m is None:
+        m = Model(path)
+    _LOADED[path] = m
+    while len(_LOADED) > 48:
+        _LOADED.pop(next(iter(_LOADED)))
+    return m
 
 
 def _model_index(chars_dir):
@@ -135,13 +173,12 @@ class Character:
         self.model_path = self._model(f.get('Override Model File') or '', f.get('Skeleton Name') or '')
         if not self.model_path:
             raise FormatError(f'{self.name}: model not found')
-        self.d = d = open(self.model_path, 'rb').read()
         try:
-            self.mesh = nxgmesh.MeshSection(d)
-            self.disp = nxgdisp.read(d, len(self.mesh.parts))
+            self.base = model(self.model_path)
+            self.d, self.mesh, self.disp = self.base.d, self.base.mesh, self.base.disp
         except (ValueError, struct.error, IndexError) as e:
             raise FormatError(f'{self.name}: {e}') from None
-        skels = [s for s in nxgskel.read_all(d)
+        skels = [s for s in self.base.skeletons
                  if all(m['special'] < len(self.disp['specials']) for m in s['meta'])]
         if not skels:
             raise FormatError(f'{self.name}: no skeleton')
@@ -152,7 +189,6 @@ class Character:
                  'bind_local': list(j['bind'])}
             b['world'] = b['bind_local'] if b['parent'] < 0 else mat_mul(b['bind_local'], self.bones[b['parent']]['world'])
             self.bones.append(b)
-        self.material_names = material_names(d)
         self.role_textures = {}
         self.layer_choice = {}
         self.attachments = []
@@ -170,7 +206,7 @@ class Character:
         self.default_layers = ({i for i in range(32) if mask >> i & 1} if isinstance(mask, int) and mask > 0 else None)
         self.textures = []          # [path of a .tex], indexed by material()['texture']
         self._tex_index = {}
-        self.attached = []          # [(model bytes, MeshSection, material names)] of attachments
+        self.attached = []          # [Model] of attachments
         self.tints = []             # each attachment's tint (hair colour)
         self.layers = self._layers()
         self._attachments()
@@ -199,9 +235,8 @@ class Character:
             if not path:
                 continue
             try:
-                d = open(path, 'rb').read()
-                mesh = nxgmesh.MeshSection(d)
-                disp = nxgdisp.read(d, len(mesh.parts))
+                am = model(path)
+                disp = am.disp
             except (ValueError, struct.error, IndexError, OSError):
                 continue
             if not disp['specials']:
@@ -211,22 +246,41 @@ class Character:
             if li == 255 or li >= len(locators):
                 continue
             k = len(self.attached)
-            self.attached.append((d, mesh, material_names(d)))
+            self.attached.append(am)
             self.tints.append(tuple(att.get('Tint Colour') or (1.0, 1.0, 1.0)))
             base = 100000 * (k + 1)
             # the object the definition names, else the first (the most detailed)
             want = (att.get('Object Name') or '').lower()
-            sp = next((x for x in disp['specials'] if want and x['name'].lower() == want), disp['specials'][0])
-            names = self.attached[-1][2]
-            # MAT_OCCLUDE pieces only mask other pieces in the game's renderer: they are not drawn
-            mats = {base + m: mat for m, mat in sp['parts']
-                    if not (mat < len(names) and 'OCCLUDE' in names[mat].upper())}
-            self._mesh_mat.update(mats)
+            specials = disp['specials']
+            named = [x for x in specials if want and x['name'].lower() == want]
+            ingame = [x for x in specials if x['name'].lower().endswith('_ingame')]
+            # the object the definition names, else the in-game pieces (LEGO Marvel's helmets: helmet and
+            # visor), else the first (the most detailed)
+            chosen = named or ingame or specials[:1]
+            # a rigid piece of the attachment sits on a joint of its own skeleton: its vertices are in that
+            # joint's frame, so the joint's bind position comes first, then the locator
+            joint_world = {}
+            for sk in am.skeletons:                  # one copy per detail level, each naming its own pieces
+                worlds = []
+                for j in sk['joints']:
+                    m = list(j['bind'])
+                    worlds.append(m if j['parent'] is None else mat_mul(m, worlds[j['parent']]))
+                for item in sk['meta']:
+                    if item['kind'] == 0 and item['joint'] < len(worlds):
+                        joint_world.setdefault(item['special'], worlds[item['joint']])
             label = att.get('Attachment Name') or stem            # LEGO Marvel leaves the name out: the file's
-            self.layers.append({'index': len(self.layers), 'name': f'TT_{label}',
-                                'chosen': True, 'parts': [{
-                                    'special': sp['name'], 'kind': 'rigid', 'bone': locators[li]['joint'],
-                                    'meshes': sorted(mats), 'mats': mats, 'matrix': list(locators[li]['matrix'])}]})
+            parts = []
+            for sp in chosen:
+                # MAT_OCCLUDE pieces are drawn invisibly: they hide what lies behind them (the inside of the mouth)
+                mats = {base + m: mat for m, mat in sp['parts']}
+                self._mesh_mat.update(mats)
+                si = specials.index(sp)
+                place = list(locators[li]['matrix'])
+                if si in joint_world:
+                    place = mat_mul(joint_world[si], place)
+                parts.append({'special': sp['name'], 'kind': 'rigid', 'bone': locators[li]['joint'],
+                              'meshes': sorted(mats), 'mats': mats, 'matrix': place})
+            self.layers.append({'index': len(self.layers), 'name': f'TT_{label}', 'chosen': True, 'parts': parts})
 
     def _model(self, override, skeleton):
         if override:
@@ -281,9 +335,9 @@ class Character:
 
     def _source(self, mesh_index):
         if mesh_index >= 100000:
-            d, mesh, names = self.attached[mesh_index // 100000 - 1]
-            return mesh, names, mesh_index % 100000
-        return self.mesh, self.material_names, mesh_index
+            am = self.attached[mesh_index // 100000 - 1]
+            return am.mesh, am.material_names, mesh_index % 100000
+        return self.mesh, self.base.material_names, mesh_index
 
     def geometry(self, mesh_index):
         mesh, _names, i = self._source(mesh_index)
@@ -326,6 +380,7 @@ class Character:
                 t = self.tints[mesh_index // 100000 - 1]
                 colour = (t[0], t[1], t[2], 1.0)
         return {'index': mi if mi is not None else -1, 'texture': tex, 'colour': colour, 'vertex_colours': vc,
+                'occluder': 'OCCLUDE' in name.upper(),
                 'name': name}
 
     def _vertex_colour(self, mesh_index):

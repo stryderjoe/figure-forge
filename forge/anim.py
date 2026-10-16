@@ -146,6 +146,40 @@ def retarget_json(owner, target, path, fps=None):
             'frames': clip.frames, 'owner': owner.id, 'target': target.id, 'retargeted': True, 'tracks': tracks}
 
 
+def find_clip(char, name):
+    """A clip of `char` by name: the exact name, else the same name in another case."""
+    clips = clip_list(char)
+    return (next((c for c in clips if c['name'] == name), None)
+            or next((c for c in clips if c['name'].lower() == name.lower()), None))
+
+
+def rest_pose(char):
+    """Newer era: the first frame of the character's idle, {bone name: {t, q, s}}: the games never show the
+    model's own pose (arms forward, capes flat), so figures stand like this when no clip plays."""
+    if not hasattr(char, 'clip_list'):
+        return None
+    clips = clip_list(char)
+    pick = (next((c for c in clips if c['name'].lower() == 'idle'), None)
+            or next((c for c in clips if c['name'].lower().startswith('idle')), None)
+            or next((c for c in clips if c['name'].lower().endswith('_idle')), None))      # Thor: Hammer_Idle
+    if pick is None:
+        return None
+    try:
+        clip = classic.load_clip(pick['file'])
+    except (ValueError, OSError):
+        return None
+    pose = clip.pose(0)
+    nf = getattr(clip, 'node_flags', None) or []
+    out = {}
+    for j in range(min(clip.nodes, len(char.bones))):
+        m = node_matrix(char, j, pose[j], nf[j] if j < len(nf) else 0)
+        r, scale = _rot(m)
+        out[char.bones[j]['name']] = {'t': [round(float(x), 5) for x in m[3, :3]],
+                                      'q': [round(float(x), 6) for x in _quat(r.T)],
+                                      's': [round(float(x), 5) for x in scale]}
+    return {'clip': pick['name'], 'bones': out}
+
+
 def clip_json(char, path, fps=None):
     """Tracks of one clip owned by `char`: {name, fps, frames, tracks: [{bone, t, q, s}]}."""
     clip = classic.load_clip(path)

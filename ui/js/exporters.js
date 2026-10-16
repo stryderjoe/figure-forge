@@ -38,15 +38,21 @@ function gltf(viewer, binary) {
   // export from the bind pose, so the skin's rest pose is right; the clip carries the motion. An editor
   // animation comes through viewer.exportHook (bone tracks plus face expressions as switched pieces).
   const playing = viewer.action, time = playing ? playing.time : 0;
-  if (playing) { viewer.mixer.stopAllAction(); viewer.restPose(); }
+  if (playing) viewer.mixer.stopAllAction();
+  viewer.restPose();
   const hook = viewer.exportHook ? viewer.exportHook() : null;
   const animations = hook ? hook.animations : viewer.clip ? [viewer.clip.userData.named] : [];
+  // invisible occluders (the newer games' mouth masks) are left out of files
+  const hidden = [];
+  viewer.figure.traverse(o => { if (o.userData && o.userData.occluder && o.visible) { o.visible = false; hidden.push(o); } });
+  const unhide = () => hidden.forEach(o => { o.visible = true; });
   return new Promise((resolve, reject) => {
     new GLTFExporter().parse(viewer.figure, result => {
+      unhide();
       if (hook) hook.cleanup();
-      if (playing) { playing.play(); playing.time = time; viewer.mixer.update(0); }
+      if (playing) { playing.play(); playing.time = time; viewer.mixer.update(0); } else viewer.showRest();
       resolve(binary ? new Uint8Array(result) : strToU8(JSON.stringify(result, null, 1)));
-    }, e => { if (hook) hook.cleanup(); reject(e); }, { binary, animations, onlyVisible: true });
+    }, e => { unhide(); if (hook) hook.cleanup(); if (!playing) viewer.showRest(); reject(e); }, { binary, animations, onlyVisible: true });
   });
 }
 
@@ -56,7 +62,7 @@ function posed(viewer) {
   viewer.figure.updateMatrixWorld(true);
   const v = new THREE.Vector3();
   viewer.figure.traverse(o => {
-    if (!o.isMesh || !o.visible) return;
+    if (!o.isMesh || !o.visible || o.userData.occluder) return;
     const src = o.geometry, n = src.attributes.position.count;
     const g = new THREE.BufferGeometry();
     const pos = new Float32Array(n * 3);

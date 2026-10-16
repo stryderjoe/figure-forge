@@ -246,7 +246,9 @@ def parts(char):
             if part['kind'] == 'rigid':
                 common = char.common[part['bone']]
                 slot = rigid_slot(layer['name'], common)
-                out.append({'id': f'{char.id}|{layer["index"]}|r{part["bone"]}', 'slot': slot, 'label': label,
+                same_bone = sum(1 for q in layer['parts'][:p_i] if q['kind'] == 'rigid' and q['bone'] == part['bone'])
+                pid = f'{char.id}|{layer["index"]}|r{part["bone"]}' + (f'.{same_bone}' if same_bone else '')
+                out.append({'id': pid, 'slot': slot, 'label': label,
                             'layer': layer['index'], 'kind': 'rigid', 'bone': common, 'part': p_i,
                             'default': default})
                 continue

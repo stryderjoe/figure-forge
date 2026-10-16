@@ -48,7 +48,9 @@ def skeleton_json(char):
     for i, b in enumerate(char.bones):
         bones.append({'name': b['name'], 'common': char.common[i], 'parent': b['parent'],
                       'matrix': skeleton.mirror(b['bind_local']).reshape(16).tolist()})
-    return {'id': char.id, 'name': char.name, 'scheme': catalog.scheme(char), 'bones': bones}
+    from . import anim
+    return {'id': char.id, 'name': char.name, 'scheme': catalog.scheme(char), 'bones': bones,
+            'rest': anim.rest_pose(char)}
 
 
 def material_json(game_id, char, mesh_index):
@@ -65,6 +67,7 @@ def material_json(game_id, char, mesh_index):
             'texture': f'/api/texture?char={char.id}&index={tex}' if has else None,
             'alpha': fmt.startswith(('DXT3', 'DXT5', 'A8R8G8B8')),
             'vertexColours': vc,
+            'occluder': bool(m.get('occluder')),
             'key': f'{char.id}#{m["index"]}' + (f'@{mesh_index}' if vc else '')}
 
 

@@ -188,7 +188,7 @@ class Handler(BaseHTTPRequestHandler):
                                                                  for c in anim.clip_list(char)]})
         if route == 'clip':
             char = st.game_of(q['char']).character(q['char'])
-            clip = next((c for c in anim.clip_list(char) if c['name'] == q['name']), None)
+            clip = anim.find_clip(char, q['name'])
             if clip is None:
                 raise KeyError(q['name'])
             target = q.get('target')

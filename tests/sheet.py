@@ -44,8 +44,11 @@ def main(argv):
             try:
                 page.js(f"(async () => {{ FF.viewer.stop && FF.viewer.stop(); await FF.setBase('{base}'); return 1; }})()")
                 if clip:
-                    page.js(f"(async () => {{ await FF.playClip('{base}', '{clip}'); FF.viewer.playing = false; "
-                            f"FF.viewer.seek(0.3); return 1; }})()")
+                    try:
+                        page.js(f"(async () => {{ await FF.playClip('{base}', '{clip}'); FF.viewer.playing = false; "
+                                f"FF.viewer.seek(0.3); return 1; }})()")
+                    except Exception as e:      # no such clip: the figure as it stands
+                        print('  no clip:', str(e)[:120], flush=True)
                 info = page.js("""(async () => { await FF.viewer.whenTexturesReady(); FF.viewer.frameFigure();
                     await new Promise(r => setTimeout(r, 400));
                     return FF.viewer.snapshot(320, 400); })()""")
@@ -55,7 +58,7 @@ def main(argv):
                     shown = page.js("document.body.innerText.slice(0, 300)") or ''
                 except Exception:
                     shown = ''
-                print('  failed:', str(e)[:200], '| page says:', shown.replace(chr(10), ' / '), flush=True)
+                print('  failed:', str(e)[:200], '| page says:', str(shown).replace(chr(10), ' / '), flush=True)
                 im = Image.new('RGB', (320, 400), (60, 20, 20))
                 ImageDraw.Draw(im).text((8, 30), str(e)[:200], fill=(255, 200, 200))
             ImageDraw.Draw(im).text((6, 6), item, fill=(255, 255, 0))

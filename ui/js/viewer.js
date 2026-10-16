@@ -115,12 +115,17 @@ export class Viewer {
       bone.userData.common = b.common;
       new THREE.Matrix4().fromArray(b.matrix).decompose(bone.position, bone.quaternion, bone.scale);
       bone.userData.bind = { p: bone.position.clone(), q: bone.quaternion.clone(), s: bone.scale.clone() };
+      // newer era: the pose the figure stands in when no clip plays (its idle's first frame)
+      const r = skel.rest && skel.rest.bones[b.name];
+      if (r) bone.userData.rest = { p: new THREE.Vector3().fromArray(r.t), q: new THREE.Quaternion().fromArray(r.q),
+                                    s: new THREE.Vector3().fromArray(r.s) };
       return bone;
     });
     skel.bones.forEach((b, i) => (b.parent >= 0 ? bones[b.parent] : this.figure).add(bones[i]));
     this.figure.updateMatrixWorld(true);
     this.bones = bones;
-    this.skeleton = new THREE.Skeleton(bones);
+    this.skeleton = new THREE.Skeleton(bones);           // inverse binds from the true bind pose
+    this.showRest();
     this.helper = new THREE.SkeletonHelper(this.figure);
     this.helper.visible = !!this.showBones;
     this.scene.children.filter(o => o.isSkeletonHelper).forEach(o => this.scene.remove(o));
@@ -157,6 +162,15 @@ export class Viewer {
     return this.bones.find(b => b.userData.common === common) || this.bones.find(b => b.name === common);
   }
 
+  // the standing pose: the rest pose where the game has one, else the bind pose
+  showRest() {
+    for (const b of this.bones || []) {
+      const r = b.userData.rest || b.userData.bind;
+      b.position.copy(r.p); b.quaternion.copy(r.q); b.scale.copy(r.s);
+    }
+    this.figure.updateMatrixWorld(true);
+  }
+
   restPose() {
     for (const b of this.bones || []) {
       const r = b.userData.bind;
@@ -191,6 +205,9 @@ export class Viewer {
                      map: info.mapOverride || this.texture(info.texture), side: THREE.FrontSide };
     if (info.alpha) Object.assign(params, { transparent: true, alphaTest: 0.05, depthWrite: true });
     if (info.vertexColours) params.vertexColors = true;
+    // writes depth only, pulled slightly toward the camera: hides what lies behind it, also pieces in its
+    // own plane (LEGO Marvel's teeth sit exactly on it)
+    if (info.occluder) Object.assign(params, { colorWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -8 });
     const m = flat ? new THREE.MeshBasicMaterial(params) : new THREE.MeshPhongMaterial(params);
     m.name = info.key || 'material';
     m.userData.info = info;
@@ -240,9 +257,13 @@ export class Viewer {
       }
       obj.name = `${part.label} ${m.mesh}`;
       obj.userData = { part: part.id, slot: part.slot, materialKey: m.material.key };   // exported as glTF extras
+      if (m.material.occluder) obj.userData.occluder = true;
       obj.frustumCulled = false;
       objs.push(obj);
     }
+    // a part with an occluder (the newer games' faces): the rest of the figure first, then the occluder (depth
+    // only), then the part's other pieces, so the inside of the mouth shows only where the mouth is open
+    if (objs.some(o => o.userData.occluder)) for (const o of objs) o.renderOrder = o.userData.occluder ? 1 : 2;
     this.parts.set(part.id, objs);
     return objs;
   }
@@ -343,7 +364,7 @@ export class Viewer {
   stop() {
     if (this.mixer) { this.mixer.stopAllAction(); this.mixer.uncacheRoot(this.figure); }
     this.mixer = null; this.action = null; this.clip = null; this.playing = false;
-    this.restPose();
+    this.showRest();
   }
 
   seek(fraction) {
