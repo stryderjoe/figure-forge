@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Figure Forge</title>
+<link rel="stylesheet" href="/ui/style.css">
+<script type="importmap">
+{ "imports": { "three": "/ui/vendor/three/three.module.js", "three/addons/": "/ui/vendor/three/addons/" } }
+</script>
+</head>
+<body>
+<header>
+  <div class="brand"><span class="logo">&#9635;</span> Figure Forge <small>classic TT LEGO characters</small></div>
+  <div class="project">
+    <button id="btn-new" title="Start a new figure">New</button>
+    <button id="btn-open" title="Open a saved figure (.forge.json)">Open</button>
+    <button id="btn-save" title="Save this figure as a project file">Save</button>
+    <input type="file" id="open-file" accept=".json" hidden>
+    <button id="btn-settings" class="icon" title="Settings">&#9881;</button>
+  </div>
+</header>
+<main>
+  <nav id="steps">
+    <button data-step="body" class="active"><b>1</b> Body</button>
+    <button data-step="parts"><b>2</b> Parts</button>
+    <button data-step="colours"><b>3</b> Colours</button>
+    <button data-step="prints"><b>4</b> Prints</button>
+    <button data-step="render"><b>5</b> Render</button>
+    <button data-step="rig"><b>6</b> Rig</button>
+    <button data-step="animate"><b>7</b> Animate</button>
+    <button data-step="export"><b>8</b> Export</button>
+  </nav>
+  <section id="panel"></section>
+  <section id="stage">
+    <canvas id="view"></canvas>
+    <div id="status"></div>
+    <div id="timeline" hidden>
+      <button id="tl-play">&#10074;&#10074;</button>
+      <input type="range" id="tl-scrub" min="0" max="1000" value="0">
+      <span id="tl-label"></span>
+      <label>speed <select id="tl-speed"><option>0.25</option><option>0.5</option><option selected>1</option><option>2</option></select></label>
+      <button id="tl-stop" title="Stop and return to the rest pose">&#9632;</button>
+    </div>
+  </section>
+</main>
+<dialog id="settings">
+  <form method="dialog">
+    <h2>Settings</h2>
+    <p class="hint">Point each game at its <b>extracted</b> folder (the one holding <code>chars</code>). Figure Forge reads your own files and never changes them.</p>
+    <label>LEGO Batman (2008) <input name="lb1" placeholder="...\extracted\game"></label>
+    <label>LEGO Indiana Jones 1 <input name="indy" placeholder="...\extracted\indy"></label>
+    <label>LEGO Star Wars: TCS <input name="tcs" placeholder="...\extracted\starwars"></label>
+    <label>LDraw parts library (optional) <input name="ldraw" placeholder="the ldraw folder of the LDraw parts library (ldraw.org)"></label>
+    <label>Blender (for FBX / .blend / USD) <input name="blender" placeholder="found automatically"></label>
+    <p id="settings-msg" class="hint"></p>
+    <menu><button value="cancel">Close</button><button id="settings-save" value="default" class="primary">Save</button></menu>
+  </form>
+</dialog>
+<script type="module" src="/ui/js/main.js"></script>
+</body>
+</html>

@@ -1,0 +1,17 @@
+.venv/
+__pycache__/
+*.pyc
+build/
+dist/
+tests/games.json
+# never commit game files or anything made from them
+*.ghg
+*.gsc
+*.an3
+*.cu2
+*.dds
+*.glb
+*.gltf
+*.fbx
+*.blend
+*.forge.json
