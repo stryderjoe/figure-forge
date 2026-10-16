@@ -11,8 +11,10 @@
 </head>
 <body>
 <header>
-  <div class="brand"><span class="logo">&#9635;</span> Figure Forge <small>classic TT LEGO characters</small></div>
+  <div class="brand"><span class="logo">&#9635;</span> Figure Forge <small>TT LEGO game characters</small></div>
   <div class="project">
+    <label class="inline" title="Which era of the games to work in: each mode lists only its games' characters and parts">Mode
+      <select id="era"></select></label>
     <button id="btn-new" title="Start a new figure">New</button>
     <button id="btn-open" title="Open a saved figure (.forge.json)">Open</button>
     <button id="btn-save" title="Save this figure as a project file">Save</button>
@@ -58,14 +60,10 @@
   <form method="dialog">
     <h2>Settings</h2>
     <p class="hint">Point each game at its <b>extracted</b> folder (the one holding <code>chars</code>). Figure Forge reads your own files and never changes them.</p>
-    <label>LEGO Batman (2008) <input name="lb1" placeholder="...\extracted\game"></label>
-    <label>LEGO Indiana Jones 1 <input name="indy" placeholder="...\extracted\indy"></label>
-    <label>LEGO Star Wars: TCS <input name="tcs" placeholder="...\extracted\starwars"></label>
+    <div id="game-fields"></div>
     <label>LDraw parts library (optional) <input name="ldraw" placeholder="the ldraw folder of the LDraw parts library (ldraw.org)"></label>
     <p class="hint">Installed games (the folders holding GAME.DAT), for putting figures into the games. Found in Steam's usual folder when left empty.</p>
-    <label>LEGO Batman install <input name="install_lb1" placeholder="found automatically"></label>
-    <label>LEGO Indiana Jones 1 install <input name="install_indy" placeholder="found automatically"></label>
-    <label>LEGO Star Wars: TCS install <input name="install_tcs" placeholder="found automatically"></label>
+    <div id="install-fields"></div>
     <label>Blender (for FBX / .blend / USD) <input name="blender" placeholder="found automatically"></label>
     <p id="settings-msg" class="hint"></p>
     <menu><button value="cancel">Close</button><button id="settings-save" value="default" class="primary">Save</button></menu>

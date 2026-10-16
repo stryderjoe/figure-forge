@@ -106,3 +106,5 @@ details.upload[open] { max-height: 40vh; overflow-y: auto; border: 1px solid var
 .expr img { width: 34px; height: 34px; object-fit: cover; border-radius: 4px; background: #222; }
 .expr span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .expr button { padding: 2px 6px; font-size: 11px; }
+dialog form { max-height: 82vh; overflow-y: auto; }
+dialog h3 { margin: 12px 0 4px; font-size: 13px; color: var(--muted); }

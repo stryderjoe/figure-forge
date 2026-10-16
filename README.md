@@ -1,12 +1,18 @@
 # Figure Forge
 
-Build your own characters from the three classic TT LEGO games:
-**LEGO Star Wars: The Complete Saga**, **LEGO Indiana Jones: The Original Adventures** and
-**LEGO Batman: The Videogame** (PC).
+Build your own characters from TT's LEGO games (PC), in three modes, one per era of their file formats:
+
+- **Classic (2007 to 2008)**: LEGO Star Wars: The Complete Saga, LEGO Indiana Jones: The Original Adventures,
+  LEGO Batman: The Videogame;
+- **Super-hero era (2011 to 2013)**: LEGO Pirates of the Caribbean, LEGO Batman 2: DC Super Heroes, LEGO Marvel
+  Super Heroes;
+- **Beyond Gotham era (2014)**: LEGO Batman 3: Beyond Gotham.
+
+Parts and animations move between all of them.
 
 1. **Body**: pick the character whose skeleton your figure is built on.
 2. **Parts**: swap heads, hair, hats, faces, torsos, arms, hands, hips, legs, capes, back items and held
-   items from any character of any of the three games. Upload your own parts too: OBJ, glTF/GLB, STL, FBX or
+   items from any character of any of the games. Upload your own parts too: OBJ, glTF/GLB, STL, FBX or
    LDraw (`.ldr`, `.mpd`, `.dat`).
 3. **Colours**: recolour any surface with the LEGO palette or any colour.
 4. **Prints**: put your own pictures on torsos, faces, legs and any other surface; drag, scale, turn and
@@ -14,12 +20,14 @@ Build your own characters from the three classic TT LEGO games:
 5. **Render**: the classic games' shiny-plastic look, a studio look, or flat textures; save a PNG.
 6. **Rig**: the figure is rigged on the game skeleton with the games' own skin weights; uploaded parts ride
    on a bone or are skinned to the nearest bones.
-7. **Animate**: play any character's classic animations on your figure. Clips from another character, even
+7. **Animate**: play any character's own animations on your figure. Clips from another character, even
    from another game, are retargeted to your body.
 8. **Export**: GLB or glTF (rigged, with the playing animation), FBX, Blender `.blend` and USD (through
    Blender), OBJ with its materials and textures, STL, PLY, PNG, and a project file you can open again.
+   **Into the game**: put the figure into its body's game, replacing that character or as a new one (every
+   game but LEGO Batman 3 so far).
 
-By **Gibby**, MIT licence. Not affiliated with TT Games, Warner Bros. Games, Lucasfilm, DC or the LEGO Group.
+By **Gibby**, MIT licence. Not affiliated with TT Games, Warner Bros. Games, Lucasfilm, Disney, Marvel, DC or the LEGO Group.
 
 ## No game files included
 
@@ -28,7 +36,7 @@ changes them. It includes no game models, textures or animations, and nothing it
 leaves your computer: the program is a small web server on `127.0.0.1` with its own window. Do not share
 exports that contain the games' assets.
 
-To extract a game, use an archive extractor for the classic games, such as
+To extract a game, use an archive extractor, such as
 [TTGames-Workshop](https://github.com/Loomirr/TTGames-Workshop)'s archive tools or `tools/extract_game.py`
 in [tt-oldera-tools](https://github.com/stryderjoe/tt-oldera-tools). Keep the folder layout: the folder you
 give Figure Forge is the one holding `chars` (and `levels`, `cut` ...).

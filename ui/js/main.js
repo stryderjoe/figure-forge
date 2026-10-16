@@ -40,7 +40,8 @@ const faces = new Faces(viewer);
 const editor = new AnimEditor(viewer, faces);
 const S = {
   settings: null, ready: [], titles: {}, index: {}, base: null, skeleton: null, parts: [], colours: {},
-  customs: [], step: 'body', clipSource: null, clipName: null, slotFilter: 'head', gameFilter: 'all',
+  customs: [], step: 'body', clipSource: null, clipName: null, slotFilter: 'head', gameFilter: 'all', eras: {},
+  era: (() => { try { return localStorage.getItem('ff-era') || 'all'; } catch (e) { return 'all'; } })(),
   search: '', exportName: 'my_figure', lastSaved: '',
 };
 let prints = null;
@@ -55,16 +56,46 @@ async function loadSettings() {
   S.ready = Object.entries(r.games).filter(([, v]) => v.ready).map(([k]) => k);
   S.blender = r.blender;
   S.installs = Object.fromEntries(Object.entries(r.games).map(([k, v]) => [k, v.install]));
-  for (const gid of S.ready) {
+  S.eras = r.eras || {};
+  fillEraSelect();
+  await indexEra();
+}
+
+// the mode: one era of the games (or all of them); only its games are indexed and listed
+function eraGames() {
+  const era = S.eras[S.era];
+  return S.ready.filter(g => !era || era.games.includes(g));
+}
+
+async function indexEra() {
+  for (const gid of eraGames()) {
+    if (S.index[gid]) continue;
     status(`Indexing ${S.titles[gid]} ...`);
     S.index[gid] = (await api(`/api/characters?game=${gid}`)).characters;
   }
   status('');
 }
 
+function fillEraSelect() {
+  const sel = $('#era');
+  sel.innerHTML = '';
+  sel.append(el('option', { value: 'all', selected: S.era === 'all' }, 'All eras'));
+  for (const [e, v] of Object.entries(S.eras)) {
+    const ready = v.games.filter(g => S.ready.includes(g)).length;
+    sel.append(el('option', { value: e, selected: S.era === e }, `${v.title}${ready ? '' : ' (no game set up)'}`));
+  }
+  sel.onchange = async () => {
+    S.era = sel.value;
+    try { localStorage.setItem('ff-era', S.era); } catch (e) { /* storage off: the mode is not remembered */ }
+    if (S.gameFilter !== 'all' && !eraGames().includes(S.gameFilter)) S.gameFilter = 'all';
+    await indexEra();
+    render();
+  };
+}
+
 function allChars(humanoidOnly) {
   const out = [];
-  for (const gid of S.ready) for (const c of S.index[gid] || []) if (!humanoidOnly || c.humanoid) out.push({ ...c, game: gid });
+  for (const gid of eraGames()) for (const c of S.index[gid] || []) if (!humanoidOnly || c.humanoid) out.push({ ...c, game: gid });
   return out;
 }
 
@@ -75,8 +106,14 @@ function partEntry(id) {
   return p ? { ...p, char: c } : null;
 }
 
+async function ensureIndex(gid) {
+  // a game outside the current mode (a saved project's body or parts): its list is loaded when needed
+  if (!S.index[gid] && S.ready.includes(gid)) S.index[gid] = (await api(`/api/characters?game=${gid}`)).characters;
+}
+
 async function setBase(cid, { keepParts = false } = {}) {
   status('Loading body ...');
+  await ensureIndex(cid.split(':')[0]);
   const keep = keepParts ? S.parts.map(p => p.id) : null;
   S.skeleton = await api(`/api/base?char=${encodeURIComponent(cid)}`);
   S.base = cid;
@@ -96,6 +133,7 @@ async function setBase(cid, { keepParts = false } = {}) {
 
 async function addPart(id, { replace = true } = {}) {
   if (!S.base) return;
+  await ensureIndex(id.split(':')[0]);
   const e = partEntry(id);
   if (!e) return;
   if (replace && !MULTI.has(e.slot)) {
@@ -207,7 +245,7 @@ PANELS.body = () => {
 function gameSelect(onchange) {
   return el('select', { onchange: e => { S.gameFilter = e.target.value; onchange(); } },
     el('option', { value: 'all' }, 'All games'),
-    ...S.ready.map(g => el('option', { value: g, selected: S.gameFilter === g }, S.titles[g])));
+    ...eraGames().map(g => el('option', { value: g, selected: S.gameFilter === g }, S.titles[g])));
 }
 
 PANELS.parts = () => {
@@ -414,7 +452,7 @@ function customControls(c) {
 PANELS.animate = () => {
   if (!S.base) return needBase();
   const tabs = el('div', { class: 'tabs' },
-    el('button', { class: S.animMode !== 'create' ? 'active' : '', onclick: () => { S.animMode = 'play'; editor.stop(); anim.drawBar(); render(); } }, 'Play classic clips'),
+    el('button', { class: S.animMode !== 'create' ? 'active' : '', onclick: () => { S.animMode = 'play'; editor.stop(); anim.drawBar(); render(); } }, 'Play game clips'),
     el('button', { class: S.animMode === 'create' ? 'active' : '', onclick: () => { S.animMode = 'create'; $('#timeline').hidden = true; editor.start(); anim.drawBar(); render(); } }, 'Create'));
   if (S.animMode === 'create') return [el('h2', {}, 'Animate'), tabs, ...anim.createPanel()];
   return [tabs, ...playPanel()];
@@ -437,7 +475,7 @@ function playPanel() {
     if (!r.clips.length) list.append(el('div', { class: 'item' }, el('small', {}, 'This character declares no clips.')));
   })();
   return [
-    el('h2', {}, 'Animate'), el('p', { class: 'hint' }, 'Play the classic animations on your figure. Clips from another character (any game) are retargeted to your body.'),
+    el('h2', {}, 'Animate'), el('p', { class: 'hint' }, "Play the games' own animations on your figure. Clips from another character (any game) are retargeted to your body."),
     el('label', {}, 'Clips of', srcList),
     el('input', { type: 'search', placeholder: 'Search clips', value: S.clipSearch || '', oninput: e => { S.clipSearch = e.target.value; render(); } }),
     el('div', { style: 'height:6px' }), list,
@@ -608,22 +646,40 @@ viewer.onFrame = () => {
   const fps = viewer.clip.userData.fps;
   $('#tl-label').textContent = `${S.clipName}  ${Math.round(viewer.action.time * fps)} / ${viewer.clip.userData.frames - 1}`;
 };
+function gameFields() {
+  // one extracted folder and one install folder per game, under its era's title
+  const games = $('#game-fields'), installs = $('#install-fields');
+  games.innerHTML = '';
+  installs.innerHTML = '';
+  for (const [, era] of Object.entries(S.eras)) {
+    games.append(el('h3', {}, era.title));
+    installs.append(el('h3', {}, era.title));
+    for (const g of era.games) {
+      games.append(el('label', {}, S.titles[g], el('input', { name: g, placeholder: '...\\extracted\\' + g })));
+      installs.append(el('label', {}, `${S.titles[g]} install`, el('input', { name: 'install_' + g, placeholder: 'found automatically' })));
+    }
+  }
+}
+
+const ALL_GAMES = () => Object.values(S.eras).flatMap(e => e.games);
+
 $('#btn-settings').onclick = () => {
+  gameFields();
   const f = $('#settings form');
-  for (const g of ['lb1', 'indy', 'tcs']) f.elements[g].value = (S.settings.games || {})[g] || '';
+  for (const g of ALL_GAMES()) f.elements[g].value = (S.settings.games || {})[g] || '';
   f.elements.ldraw.value = S.settings.ldraw || '';
   f.elements.blender.value = S.settings.blender || '';
-  for (const g of ['lb1', 'indy', 'tcs']) f.elements['install_' + g].value = (S.settings.installs || {})[g] || S.installs[g] || '';
+  for (const g of ALL_GAMES()) f.elements['install_' + g].value = (S.settings.installs || {})[g] || S.installs[g] || '';
   $('#settings-msg').textContent = S.blender ? `Blender: ${S.blender}` : 'Blender not found.';
   $('#settings').showModal();
 };
 $('#settings-save').onclick = async e => {
   e.preventDefault();
   const f = $('#settings form');
-  const games = Object.fromEntries(['lb1', 'indy', 'tcs'].map(g => [g, f.elements[g].value.trim()]));
+  const games = Object.fromEntries(ALL_GAMES().map(g => [g, f.elements[g].value.trim()]));
   const r = await api('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ games, ldraw: f.elements.ldraw.value.trim(), blender: f.elements.blender.value.trim(),
-                           installs: Object.fromEntries(['lb1', 'indy', 'tcs'].map(g => [g, f.elements['install_' + g].value.trim()])) }) });
+                           installs: Object.fromEntries(ALL_GAMES().map(g => [g, f.elements['install_' + g].value.trim()])) }) });
   $('#settings-msg').textContent = `Ready: ${r.ready.map(g => S.titles[g]).join(', ') || 'none'}`;
   await loadSettings();
   render();

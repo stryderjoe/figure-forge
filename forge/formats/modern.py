@@ -444,8 +444,14 @@ class Character:
             named = [x for x in specials if want and x['name'].lower() == want]
             ingame = [x for x in specials if x['name'].lower().endswith('_ingame')]
             # the object the definition names, else the in-game pieces (LEGO Marvel's helmets: helmet and
-            # visor), else the first (the most detailed)
-            chosen = named or ingame or specials[:1]
+            # visor), else the first detail level's pieces
+            # (LEGO Batman 3's Killer Croc head: Head, Head_NonBlended and Jaw): the pieces up to the first repeated name
+            first = []
+            for x in specials:
+                if any(x['name'] == y['name'] for y in first):
+                    break
+                first.append(x)
+            chosen = named or ingame or first or specials[:1]
             # a rigid piece of the attachment sits on a joint of its own skeleton: its vertices are in that
             # joint's frame, so the joint's bind position comes first, then the locator
             joint_world = {}

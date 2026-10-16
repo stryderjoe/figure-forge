@@ -165,6 +165,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(200, {'settings': st.cfg, 'games': {gid: {'title': t, 'ready': gid in st.games,
                                                                  'install': gameexport.find_install(gid, st.cfg)}
                                                                  for gid, t in catalog.GAMES.items()},
+                                   'eras': {e: {'title': v['title'], 'games': v['games']} for e, v in catalog.ERAS.items()},
                                    'blender': settings.find_blender(st.cfg)})
         if route == 'characters':
             gid = q['game']
