@@ -23,7 +23,7 @@ import struct
 MARK = bytes([11, 0, 0, 0]) + b'StreamInfo' + bytes([0])
 
 
-LAYOUT = {29: (4, 4), 28: (4, 4), 25: (3, 4), 24: (5, 4), 22: (5, 2)}       # stream version -> (object header bytes, list count bytes), measured
+LAYOUT = {29: (4, 4), 28: (4, 4), 25: (3, 4), 24: (5, 4), 23: (5, 2), 22: (5, 2), 20: (5, 2)}       # stream version -> (object header bytes, list count bytes), measured
 
 
 class StreamError(ValueError):
@@ -126,7 +126,10 @@ class Stream:
             for _ in range(r.u32()):
                 t = r.u32()
                 fname = r.str()
-                a, b, c, d = struct.unpack('<IIIi', r.raw(16))
+                if self.version >= 22:
+                    a, b, c, d = struct.unpack('<IIIi', r.raw(16))
+                else:                              # version 20 (some LEGO Pirates definitions): no fourth word
+                    (a, b, c), d = struct.unpack('<III', r.raw(12)), -1
                 if self.version >= 28:
                     r.raw(4)                       # LEGO Batman 3 (versions 28, 29): one more word per field
                 # a field whose first flag word is 0x8000000N with N = 2 holds an object of class t, inline
