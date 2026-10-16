@@ -23,7 +23,8 @@ ROLE = {'HEAD_FRONT': 1, 'HEAD_BACK': 2, 'BODY_FRONT': 3, 'BODY_BACK': 4, 'RIGHT
         'ARMS': 5, 'HANDS': 6, 'LEGS': 8, 'SKIRT': 12,
         # LEGO Batman 3 writes the sides with an underscore
         'RIGHT_ARM': 5, 'LEFT_ARM': 24, 'RIGHT_HAND': 6, 'LEFT_HAND': 26, 'RIGHT_LEG': 8, 'LEFT_LEG': 25,
-        'GLASSES_LEFT': 9, 'GLASSES_RIGHT': 10}
+        'GLASSES_LEFT': 9, 'GLASSES_RIGHT': 10,
+        'FACETEX_MAT': 1}           # LEGO Batman 3's texture-faced heads: the face print
 IDENTITY = [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0]
 SKELETON_MODELS = {'super_minifig': [('minifigs', 'super_characters', 'super_minifig', 'super_minifig_nxg.ghg'),
                                      ('super_character', 'super_minifig', 'super_minifig_nxg.ghg')]}   # LEGO Batman 3
@@ -399,6 +400,7 @@ class Character:
         self._tex_index = {}
         self.attached = []          # [Model] of attachments
         self.tints = []             # each attachment's tint (hair colour)
+        self.attachment_roles = {}  # attachment number -> {role: texture} of its own definition (texture faces)
         self.layers = self._layers()
         self._attachments()
 
@@ -423,6 +425,12 @@ class Character:
             if not path:                                   # LEGO Marvel names some by file name alone
                 index = _model_index(self.chars_dir)
                 path = index.get(stem.lower() + '_nxg.ghg') or index.get(stem.lower() + '_nxg.gsc')
+            roles = None
+            if not path:
+                scene = self._scene_attachment(stem)
+                if scene:
+                    path, obj, roles = scene
+                    att = dict(att, **{'Object Name': obj})
             if not path:
                 # LEGO Marvel: capes and skinned hair are small definitions of their own (cape_red.cd)
                 self._sub_attachment(att, stem)
@@ -441,6 +449,8 @@ class Character:
             k = len(self.attached)
             self.attached.append(am)
             self.tints.append(self._attachment_tint(att, stem))
+            if roles:
+                self.attachment_roles[k] = roles
             base = 100000 * (k + 1)
             # the object the definition names, else the first (the most detailed)
             want = (att.get('Object Name') or '').lower()
@@ -621,6 +631,34 @@ class Character:
             j = joints[j]['parent']
         return None
 
+    def _scene_attachment(self, stem):
+        """An attachment whose definition names a scene and an object in it instead of a model (LEGO Batman 3's
+        texture-faced heads: facetex_goonlanternb.cd shows FaceTex_Head of FACETEX_HEAD with its own face print as
+        material 1): (scene path, object name, {role: texture}), or None."""
+        cd = _cd_index(self.chars_dir).get(stem.lower() + '.cd')
+        if not cd:
+            return None
+        try:
+            stream = ttstream.Stream(open(cd, 'rb').read())
+        except (ttstream.StreamError, struct.error, ValueError, OSError):
+            return None
+        root = stream.roots[0][0] if stream.roots and stream.roots[0] else None
+        scene = root and root['fields'].get('Scene File')
+        if not isinstance(scene, str) or not scene:
+            return None
+        rel = scene.replace('\\', '/').split('/')
+        if rel[0].lower() == 'chars':
+            rel = rel[1:]
+        path = _find(self.chars_dir, rel[:-1] + [rel[-1] + '_nxg.gsc']) or _find(self.chars_dir, rel[:-1] + [rel[-1] + '_nxg.ghg'])
+        if not path:
+            return None
+        roles = {}
+        for o in (x for r in stream.roots for x in ttstream.walk(r)):
+            g = o['fields']
+            if o['class'] == 'Character Texture' and isinstance(g.get('Texture File'), str):
+                roles[g.get('Material')] = g['Texture File']
+        return path, root['fields'].get('Scene Object') or '', roles
+
     def _attachment_tint(self, att, stem):
         """The attachment's tint times that of a definition of the same name beside its model (LEGO Batman 3's
         skinnedhair_mediumwavy.cd: blonde; its _black and _red copies are other definitions of the same model)."""
@@ -717,6 +755,9 @@ class Character:
         role = name.split(':')[0].upper()
         role = role[:-5] if role.endswith('_GAME') else role
         path = self.role_textures.get(ROLE.get(role))
+        own_roles = self.attachment_roles.get(mesh_index // 100000 - 1) if mesh_index >= 100000 else None
+        if own_roles and ROLE.get(role) in own_roles:
+            path = own_roles[ROLE[role]]
         if path is None and role == 'CAPE_INSIDE':
             path = self.role_textures.get(ROLE['CAPE'])          # no lining of its own: the cape's texture
         tex = -1
