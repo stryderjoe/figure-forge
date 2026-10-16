@@ -22,7 +22,8 @@ ROLE = {'HEAD_FRONT': 1, 'HEAD_BACK': 2, 'BODY_FRONT': 3, 'BODY_BACK': 4, 'RIGHT
         # jacksparrow_captain and elizabeth_redgown)
         'ARMS': 5, 'HANDS': 6, 'LEGS': 8, 'SKIRT': 12,
         # LEGO Batman 3 writes the sides with an underscore
-        'RIGHT_ARM': 5, 'LEFT_ARM': 24, 'RIGHT_HAND': 6, 'LEFT_HAND': 26, 'RIGHT_LEG': 8, 'LEFT_LEG': 25}
+        'RIGHT_ARM': 5, 'LEFT_ARM': 24, 'RIGHT_HAND': 6, 'LEFT_HAND': 26, 'RIGHT_LEG': 8, 'LEFT_LEG': 25,
+        'GLASSES_LEFT': 9, 'GLASSES_RIGHT': 10}
 IDENTITY = [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0]
 SKELETON_MODELS = {'super_minifig': [('minifigs', 'super_characters', 'super_minifig', 'super_minifig_nxg.ghg'),
                                      ('super_character', 'super_minifig', 'super_minifig_nxg.ghg')]}   # LEGO Batman 3
