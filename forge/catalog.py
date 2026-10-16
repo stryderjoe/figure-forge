@@ -246,7 +246,7 @@ def parts(char):
         # head and arms sit on layers his definition does not show)
         def attached_shown(L):
             src = L.get('from_layer')
-            return dl is None or not isinstance(src, int) or src in dl
+            return dl is None or not isinstance(src, int) or src < 0 or src in dl     # -1: on no layer, always shown
         shown = {L['index'] for L in char.layers
                  if ((L['name'].startswith('TT_') and attached_shown(L)) or
                      (not L['name'].startswith('TT_') and (L['index'] in dl if dl is not None else
