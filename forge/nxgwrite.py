@@ -335,7 +335,10 @@ class NxgWriter:
         if len(new_stem) != len(old):
             raise WriteError(f'the new model name must have {len(old)} letters')
         for s0, s1 in regions:
-            for m in re.finditer(re.escape(old.encode('latin1')), d[s0:s1], re.IGNORECASE):
+            # file names only ('<model>_nxg.*', the source '<model>.hgo'): the folder keeps its name, as the new
+            # model lives beside the shared one (a folder the game's chardata.txt validates)
+            pattern = re.escape(old.encode('latin1')) + rb'(?=_nxg|\.hgo)'
+            for m in re.finditer(pattern, d[s0:s1], re.IGNORECASE):
                 found = m.group(0).decode('latin1')
                 new = new_stem.upper() if found.isupper() else new_stem.lower() if found.islower() else new_stem.title()
                 sp.put(s0 + m.start(), new.encode('latin1'))

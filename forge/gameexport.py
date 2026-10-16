@@ -81,26 +81,27 @@ def nxg_files_for(game, base_char, glb, mode, report=print):
         raise ExportError(f'adding a new character to {game.title} is not built yet: replace a character instead')
     writer = nxgwrite.NxgWriter(base_char)
     base = re.sub(r'[^a-z0-9_]', '_', base_char.name.lower())
+    # the new model goes beside the shared one: the games only load models from the folders chars\chardata.txt
+    # validates (Super_Minifig is one; a character's own folder is not)
+    folder = os.path.dirname(archive_path(game.root, writer.path))
+    rel = folder.split(BS)[1:]                                      # below 'chars'
     if writer.companion is None:
-        # LEGO Batman 2: any name, in a folder of Figure Forge's own
+        # LEGO Batman 2: any name
         stem = base[:24] + '_ff'
         out = writer.write(glb, stem, report=report)
-        files = {f'chars{BS}minifigs{BS}figureforge{BS}{stem}_nxg.ghg': out['ghg']}
-        ref = f'MiniFigs{BS}FigureForge{BS}{stem.upper()}'
+        files = {f'{folder}{BS}{stem}_nxg.ghg': out['ghg']}
     else:
         # LEGO Marvel: the name has the shared model's length (its resource header names the companions by it),
-        # in a folder beside the shared model's, with a copy of its shaders
+        # with a copy of the shared model's shaders
         size = len(writer.stem)
         stem = ('ff' + base)[:size].ljust(size, '_')
         out = writer.write(glb, stem, report=report, new_stem=stem)
-        folder = os.path.dirname(os.path.dirname(archive_path(game.root, writer.path)))
         with open(writer.path[:-len('.ghg')] + '.pc_shaders', 'rb') as f:
             shaders = f.read()
-        files = {f'{folder}{BS}{stem}{BS}{stem}_nxg.ghg': out['ghg'],
-                 f'{folder}{BS}{stem}{BS}{stem}_nxg.nxg_textures': out['nxg_textures'],
-                 f'{folder}{BS}{stem}{BS}{stem}_nxg.pc_shaders': shaders}
-        rel = folder.split(BS)[1:]                                  # below 'chars'
-        ref = BS.join([x.title() if x.islower() else x for x in rel] + [stem.title(), stem.upper()])
+        files = {f'{folder}{BS}{stem}_nxg.ghg': out['ghg'],
+                 f'{folder}{BS}{stem}_nxg.nxg_textures': out['nxg_textures'],
+                 f'{folder}{BS}{stem}_nxg.pc_shaders': shaders}
+    ref = BS.join(rel + [stem.upper()])
     files[archive_path(game.root, base_char.path)] = nxgwrite.definition(base_char, ref)
     report(f'{base_char.name} now wears the figure (model {stem}_nxg.ghg).')
     return files
