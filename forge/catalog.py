@@ -41,7 +41,8 @@ def era_of(game_id):
     return next((e for e, v in ERAS.items() if game_id in v['games']), 'classic')
 SLOTS = ['head', 'face', 'hair', 'headgear', 'neck', 'torso', 'arms', 'hands', 'hips', 'legs', 'cape',
          'back', 'held', 'accessory']
-SKIP_LAYER = re.compile(r'breakup|blowup|_dead|dead_|^tt\d+_dead|(^|_)(low|lo|med|medium|vlo|verylo)(_?res)?(_|$)|'
+# 'dead' only as a word of its own: TT_FACE_DEADPOOL, Deadshot and Deadman are not death layers
+SKIP_LAYER = re.compile(r'breakup|blowup|(^|_)dead(_|\d|$)|^tt\d+_dead(_|\d|$)|(^|_)(low|lo|med|medium|vlo|verylo)(_?res)?(_|$)|'
                         r'_(medium|low)_', re.I)
 # layers named only for their detail level or the whole body hold the plain figure (Star Wars: TT2_HiRes_Nextgen)
 GENERIC_LAYER = re.compile(r'alwaysdrawn|hi_?res|high|special|^tt\d+_body|default|^tt\d+_nextgen', re.I)
