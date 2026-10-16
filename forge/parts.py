@@ -71,8 +71,9 @@ def _pack(mesh):
                 else v.ravel().tolist() if isinstance(v, np.ndarray) else v) for k, v in mesh.items()}
 
 
-def part_json(game, part_id, base):
-    """Meshes of one part fitted to the base character."""
+def part_json(game, part_id, base, model_space=False):
+    """Meshes of one part fitted to the base character. model_space=True gives a rigid piece in the model's
+    space at the bind pose instead of its bone's (for pictures of the part on its own)."""
     char_id, layer_i, key = part_id.split('|', 2)
     donor = game.character(char_id)
     layer = donor.layers[int(layer_i)]
@@ -101,6 +102,10 @@ def part_json(game, part_id, base):
             p3 = (p @ to_anchor)[:, :3] @ turn
             if n is not None:
                 n = n @ to_anchor[:3, :3] @ turn
+            if model_space:
+                p3 = (np.c_[p3, np.ones(len(p3))] @ wb[b])[:, :3]
+                if n is not None:
+                    n = n @ wb[b][:3, :3]
             out['bone'] = base.common[b]
             out['boneName'] = base.bones[b]['name']
         else:

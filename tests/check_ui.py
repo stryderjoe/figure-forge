@@ -125,7 +125,29 @@ def main():
             return { ids, slots: FF.S.parts.map(p => p.slot) };
         })()""")
         check(len(got['ids']) == 3 and got['slots'].count('head') == 1, f'swapped in parts from Star Wars and Indy: {got["ids"]}')
-        page.js("FF.S.step = 'parts'; FF.render(); FF.viewer.frameFigure()")
+        page.js("FF.S.step = 'parts'; FF.S.slotFilter = 'head'; FF.render(); FF.viewer.frameFigure()")
+        page.wait("document.querySelectorAll('#panel .tile img.thumb[src]').length >= 6", 120)
+        got = page.js("""(async () => {
+            const tiles = document.querySelector('#panel .tiles');
+            tiles.scrollTop = 900; await new Promise(r => setTimeout(r, 300));
+            const before = tiles.scrollTop;
+            const r = tiles.getBoundingClientRect();
+            const tile = [...tiles.querySelectorAll('.tile')].find(t => { const b = t.getBoundingClientRect(); return b.top > r.top && b.bottom < r.bottom && !t.classList.contains('on'); });
+            tile.click();
+            await new Promise(r => setTimeout(r, 2500));
+            const after = document.querySelector('#panel .tiles').scrollTop;
+            return { before, after, on: tile.classList.contains('on'), thumbs: tiles.querySelectorAll('img.thumb[src]').length,
+                     panelScroll: document.querySelector('#panel').scrollHeight <= document.querySelector('#panel').clientHeight + 1,
+                     tiles: tiles.children.length };
+        })()""")
+        check(got['before'] > 0 and abs(got['after'] - got['before']) < 2 and got['on'],
+              f'parts list keeps its place when a part is put on ({got})')
+        check(got['panelScroll'], 'the parts panel does not scroll itself: only its list does')
+        page.shot('2_parts_scrolled.png')
+        page.js("(async () => { for (const id of FF.S.parts.filter(p => p.slot === 'head').map(p => p.id)) FF.removePart(id); })()")
+        page.js("FF.S.parts.length")
+        page.js("""(async () => { const c = FF.S.index.tcs.find(c => c.name.toLowerCase() === 'lukeskywalker_tatooine');
+            await FF.addPart(c.parts.find(p => p.slot === 'head' && p.default).id); FF.render(); })()""")
         time.sleep(1.0)
         page.shot('2_parts.png')
 

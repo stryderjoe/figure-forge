@@ -147,6 +147,10 @@ class Handler(BaseHTTPRequestHandler):
                 lib = STATE.cfg.get('ldraw', '')
                 return self.static(lib, url.path[7:]) if lib else self.send(404, {'error': 'no LDraw library set'})
             if url.path.startswith('/api/'):
+                if url.path[5:] in ('base', 'part', 'texture', 'clips', 'clip'):
+                    # one at a time: the character cache and part lists are shared between request threads
+                    with STATE.lock:
+                        return self.api_get(url.path[5:], q)
                 return self.api_get(url.path[5:], q)
             return self.send(404, {'error': 'not found'})
         except KeyError as e:
@@ -174,7 +178,7 @@ class Handler(BaseHTTPRequestHandler):
         if route == 'part':
             base = st.game_of(q['base']).character(q['base'])
             game = st.game_of(q['id'])
-            return self.send(200, parts.part_json(game, q['id'], base))
+            return self.send(200, parts.part_json(game, q['id'], base, model_space=q.get('space') == 'model'))
         if route == 'texture':
             return self.send(200, texture_png(st, q['char'], int(q['index'])), 'image/png')
         if route == 'clips':

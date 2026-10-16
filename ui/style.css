@@ -62,3 +62,28 @@ dialog menu { display: flex; justify-content: flex-end; gap: 8px; padding: 0; }
 .ok { color: var(--ok); } .bad { color: var(--accent2); }
 .tag { font-size: 11px; color: #000; background: var(--accent); border-radius: 4px; padding: 0 5px; margin-left: 6px; }
 .tree { font-family: Consolas, monospace; font-size: 12px; max-height: 50vh; overflow: auto; background: #0f1217; border: 1px solid var(--line); border-radius: 6px; padding: 6px; white-space: pre; }
+
+/* panels whose list fills the rest of the height (body, parts): one scroll area, the list */
+#panel.fill { display: flex; flex-direction: column; overflow: hidden; }
+#panel.fill > * { flex: none; }
+#panel.fill > .grow { flex: 1 1 auto; min-height: 120px; overflow-y: auto; margin-top: 6px; }
+.tiles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; align-content: start; padding: 2px 2px 8px; }
+.tile { background: #0f1217; border: 1px solid var(--line); border-radius: 8px; padding: 4px 4px 6px; cursor: pointer; display: flex; flex-direction: column; align-items: center; text-align: center; min-width: 0; }
+.tile:hover { border-color: #4a5566; background: #151a21; }
+.tile.on { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+.tile.loading { opacity: .5; }
+.tile .thumb { width: 100%; aspect-ratio: 1; object-fit: contain; background: radial-gradient(circle at 50% 40%, #26303f, #0f1217 70%); border-radius: 6px; }
+.tile .thumb:not([src]) { opacity: .4; }
+.tile .cap { font-size: 12px; margin-top: 3px; width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tile small { font-size: 10.5px; color: var(--muted); width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.slotgrid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; margin: 4px 0 6px; }
+.slotbtn { padding: 5px 4px; font-size: 12px; text-transform: capitalize; display: flex; justify-content: center; gap: 5px; align-items: center; }
+.slotbtn b { background: var(--panel); color: var(--muted); border-radius: 8px; font-size: 10px; padding: 0 5px; }
+.slotbtn.filled { color: var(--text); }
+.slotbtn.active { background: var(--accent); color: #000; border-color: var(--accent); }
+.slotbtn.active b { background: #0003; color: #000; }
+.current { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; min-height: 26px; margin-bottom: 4px; }
+.current .chip { margin: 0 4px 0 0; }
+details.upload { margin: 4px 0; }
+details.upload summary { cursor: pointer; color: var(--muted); font-size: 12.5px; padding: 4px 0; }
+details.upload[open] { max-height: 40vh; overflow-y: auto; border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; }

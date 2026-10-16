@@ -9,6 +9,7 @@ import { Viewer, STYLES } from './viewer.js';
 import { PrintEditor } from './prints.js';
 import { LEGO_COLOURS, hexToRgb, rgbToHex } from './palette.js';
 import { FORMATS, exportFigure } from './exporters.js';
+import { Thumbs } from './thumbs.js';
 
 const $ = s => document.querySelector(s);
 const el = (tag, attrs = {}, ...kids) => {
@@ -31,6 +32,7 @@ const api = async (path, opts) => {
 const status = text => { $('#status').textContent = text || ''; };
 
 const viewer = new Viewer($('#view'));
+const thumbs = new Thumbs();
 const S = {
   settings: null, ready: [], titles: {}, index: {}, base: null, skeleton: null, parts: [], colours: {},
   customs: [], step: 'body', clipSource: null, clipName: null, slotFilter: 'head', gameFilter: 'all',
@@ -169,83 +171,107 @@ async function attachCustom(c) {
 const PANELS = {};
 
 PANELS.body = () => {
-  const list = el('div', { class: 'list' });
+  const tiles = el('div', { class: 'tiles grow', 'data-scroll': 'body' });
+  const mark = () => { for (const t of tiles.children) t.classList.toggle('on', t.dataset.id === S.base); };
   const fill = () => {
-    list.innerHTML = '';
+    tiles.innerHTML = '';
     const q = S.search.toLowerCase();
     for (const c of allChars(true)) {
       if (S.gameFilter !== 'all' && c.game !== S.gameFilter) continue;
       if (q && !c.name.toLowerCase().includes(q) && !c.folder.toLowerCase().includes(q)) continue;
-      list.append(el('div', { class: 'item' + (c.id === S.base ? ' on' : ''), onclick: async () => { await setBase(c.id); render(); } },
-        el('span', {}, c.name), el('small', {}, `${c.game.toUpperCase()} · ${c.bones} bones`)));
+      const look = c.parts.filter(p => p.default).map(p => p.id);
+      tiles.append(el('div', { class: 'tile' + (c.id === S.base ? ' on' : ''), 'data-id': c.id, title: `${c.name} (${S.titles[c.game]}, ${c.bones} bones)`,
+        onclick: async () => { await setBase(c.id); mark(); } },
+        thumbs.image('c:' + c.id, look, c.id), el('span', { class: 'cap' }, c.name), el('small', {}, c.game.toUpperCase())));
     }
+    if (!tiles.children.length) tiles.append(el('p', { class: 'hint' }, 'Nothing matches.'));
   };
   fill();
   return [
     el('h2', {}, 'Body'),
-    el('p', { class: 'hint' }, 'Pick the character whose skeleton and body your figure is built on. Its own look comes with it; change anything in the next steps. Parts and animations from the other games are fitted to this body.'),
-    gameSelect(fill),
-    el('input', { type: 'search', placeholder: 'Search characters', value: S.search, oninput: e => { S.search = e.target.value; fill(); } }),
-    el('div', { style: 'height:6px' }), list,
+    el('p', { class: 'hint' }, 'Pick the character your figure is built on: its skeleton, body and look. Change anything in the next steps.'),
+    el('div', { class: 'row' }, gameSelect(fill),
+      el('input', { type: 'search', placeholder: 'Search characters', value: S.search, style: 'flex:1', oninput: e => { S.search = e.target.value; fill(); } })),
     S.ready.length ? null : el('p', { class: 'bad' }, 'No game is set up yet: open Settings (the gear, top right).'),
+    tiles,
   ];
 };
 
 function gameSelect(onchange) {
-  return el('div', { class: 'row' }, el('select', { onchange: e => { S.gameFilter = e.target.value; onchange(); } },
+  return el('select', { onchange: e => { S.gameFilter = e.target.value; onchange(); } },
     el('option', { value: 'all' }, 'All games'),
-    ...S.ready.map(g => el('option', { value: g, selected: S.gameFilter === g }, S.titles[g]))));
+    ...S.ready.map(g => el('option', { value: g, selected: S.gameFilter === g }, S.titles[g])));
 }
 
 PANELS.parts = () => {
   if (!S.base) return needBase();
-  const slots = el('div');
-  const present = new Set(S.parts.map(p => p.slot));
-  for (const slot of SLOT_ORDER) {
-    const mine = S.parts.filter(p => p.slot === slot);
-    if (!mine.length && !['head', 'hair', 'headgear', 'torso', 'legs', 'held', 'back', 'cape'].includes(slot) && !present.has(slot)) continue;
-    slots.append(el('div', { class: 'slot' },
-      el('div', { class: 'head' }, el('span', { class: 'name' }, slot),
-        el('button', { onclick: () => { S.slotFilter = slot; render(); setTimeout(() => $('#picker-search') && $('#picker-search').focus()); } }, mine.length && !MULTI.has(slot) ? 'Change' : 'Add')),
-      ...mine.map(p => el('span', { class: 'chip' }, p.label, el('button', { title: 'Remove', onclick: () => { removePart(p.id); render(); } }, '×')))));
-  }
-  for (const c of S.customs) {
-    slots.append(el('div', { class: 'slot' }, el('div', { class: 'head' }, el('span', { class: 'name' }, 'Your part'),
-      el('span', { class: 'chip' }, `${c.name} on ${c.bone}`, el('button', { onclick: () => { viewer.removePart(c.id); S.customs = S.customs.filter(x => x !== c); render(); } }, '×')))));
-  }
-  const list = el('div', { class: 'list' });
+  const slotGrid = el('div', { class: 'slotgrid' });
+  const current = el('div', { class: 'current' });
+  const tiles = el('div', { class: 'tiles grow', 'data-scroll': 'parts-' + S.slotFilter });
+  const refresh = () => {
+    slotGrid.innerHTML = '';
+    for (const slot of SLOT_ORDER.concat(S.customs.length ? ['yours'] : [])) {
+      const n = slot === 'yours' ? S.customs.length : S.parts.filter(p => p.slot === slot).length;
+      slotGrid.append(el('button', { class: 'slotbtn' + (slot === S.slotFilter ? ' active' : '') + (n ? ' filled' : ''),
+        onclick: () => { S.slotFilter = slot; render(); } }, slot, n ? el('b', {}, String(n)) : null));
+    }
+    current.innerHTML = '';
+    if (S.slotFilter === 'yours') {
+      for (const c of S.customs) current.append(el('span', { class: 'chip' }, `${c.name} on ${c.bone}`,
+        el('button', { title: 'Remove', onclick: () => { viewer.removePart(c.id); S.customs = S.customs.filter(x => x !== c); refresh(); } }, '×')));
+    } else {
+      const mine = S.parts.filter(p => p.slot === S.slotFilter);
+      current.append(el('span', { class: 'hint', style: 'margin:0 6px 0 0' }, mine.length ? 'On your figure:' : `No ${S.slotFilter} on your figure.`));
+      for (const p of mine) current.append(el('span', { class: 'chip' }, p.label,
+        el('button', { title: 'Remove', onclick: () => { removePart(p.id); refresh(); } }, '×')));
+    }
+    for (const t of tiles.children) if (t.dataset.id) t.classList.toggle('on', S.parts.some(p => p.id === t.dataset.id));
+  };
   const fill = () => {
-    list.innerHTML = '';
+    tiles.innerHTML = '';
+    tiles.dataset.scroll = 'parts-' + S.slotFilter;
+    if (S.slotFilter === 'yours') { tiles.append(el('p', { class: 'hint' }, 'Your uploaded parts are listed above; adjust them under Rig.')); return; }
     const q = (S.partSearch || '').toLowerCase();
-    let n = 0;
     for (const c of allChars(false)) {
       if (S.gameFilter !== 'all' && c.game !== S.gameFilter) continue;
       for (const p of c.parts) {
         if (p.slot !== S.slotFilter) continue;
-        const text = `${c.name} ${p.label}`.toLowerCase();
-        if (q && !text.includes(q)) continue;
-        if (++n > 400) break;
-        const on = S.parts.some(x => x.id === p.id);
-        list.append(el('div', { class: 'item' + (on ? ' on' : ''), onclick: async () => {
-          if (on) removePart(p.id); else { status('Fitting part ...'); await addPart(p.id); status(''); }
-          render();
-        } }, el('span', {}, c.name, el('small', {}, ' · ' + p.label)), el('small', {}, c.game.toUpperCase())));
+        if (q && !`${c.name} ${p.label}`.toLowerCase().includes(q)) continue;
+        // a head is shown, and put on, with its own character's face print (faces are separate pieces)
+        const faces = p.slot === 'head' ? c.parts.filter(f => f.slot === 'face' && f.default).map(f => f.id) : [];
+        tiles.append(el('div', { class: 'tile' + (S.parts.some(x => x.id === p.id) ? ' on' : ''), 'data-id': p.id,
+          title: `${c.name} · ${p.label} (${S.titles[c.game]})`,
+          onclick: async e => {
+            const tile = e.currentTarget;
+            if (S.parts.some(x => x.id === p.id)) removePart(p.id);
+            else {
+              tile.classList.add('loading'); status('Fitting part ...');
+              await addPart(p.id);
+              if (p.slot === 'head' && S.withFace !== false && faces.length) {
+                for (const old of S.parts.filter(x => x.slot === 'face')) removePart(old.id);
+                for (const f of faces) await addPart(f, { replace: false });
+              }
+              status(''); tile.classList.remove('loading');
+            }
+            refresh();
+          } },
+          thumbs.image('p:' + p.id + (faces.length ? '+face' : ''), [p.id, ...faces], c.id), el('span', { class: 'cap' }, c.name), el('small', {}, `${p.label} · ${c.game.toUpperCase()}`)));
       }
     }
-    if (!n) list.append(el('div', { class: 'item' }, el('small', {}, 'Nothing matches.')));
+    if (!tiles.children.length) tiles.append(el('p', { class: 'hint' }, 'Nothing matches.'));
   };
   fill();
+  refresh();
   return [
-    el('h2', {}, 'Parts'), el('p', { class: 'hint' }, 'Each slot holds one piece (held items, back items and accessories can hold several). Pieces from any character and any of the three games are fitted to your body.'),
-    slots,
-    el('h3', {}, 'Choose a part'),
-    el('div', { class: 'row' },
-      el('select', { onchange: e => { S.slotFilter = e.target.value; fill(); } }, ...SLOT_ORDER.map(s => el('option', { value: s, selected: s === S.slotFilter }, s))),
-      gameSelect(fill)),
-    el('input', { type: 'search', id: 'picker-search', placeholder: 'Search parts (character or piece name)', value: S.partSearch || '', oninput: e => { S.partSearch = e.target.value; fill(); } }),
-    el('div', { style: 'height:6px' }), list,
-    el('h3', {}, 'Upload your own part'),
-    uploadForm(),
+    el('h2', {}, 'Parts'),
+    el('p', { class: 'hint' }, 'Pick a slot, then click a part to put it on (click again to take it off). Parts from any character and game are fitted to your body.'),
+    slotGrid, current,
+    S.slotFilter === 'head' ? el('label', { class: 'inline', style: 'margin:0 0 4px' }, el('input', { type: 'checkbox', checked: S.withFace !== false,
+      onchange: e => { S.withFace = e.target.checked; } }), 'Bring the face with the head') : null,
+    el('div', { class: 'row' }, gameSelect(fill),
+      el('input', { type: 'search', placeholder: 'Search this slot', value: S.partSearch || '', style: 'flex:1', oninput: e => { S.partSearch = e.target.value; fill(); } })),
+    el('details', { class: 'upload' }, el('summary', {}, 'Upload your own part'), uploadForm()),
+    tiles,
   ];
 };
 
@@ -446,10 +472,16 @@ function needBase() { return [el('h2', {}, 'No body yet'), el('p', { class: 'hin
 function render() {
   for (const b of document.querySelectorAll('#steps button')) b.classList.toggle('active', b.dataset.step === S.step);
   const panel = $('#panel');
-  const scroll = panel.scrollTop;
+  // keep each list's place: lists carry data-scroll, the panel itself is kept per step
+  S.scrolls = S.scrolls || {};
+  for (const e of panel.querySelectorAll('[data-scroll]')) S.scrolls[e.dataset.scroll] = e.scrollTop;
+  S.scrolls['panel-' + (panel.dataset.step || '')] = panel.scrollTop;
   panel.innerHTML = '';
+  panel.dataset.step = S.step;
+  panel.classList.toggle('fill', S.step === 'body' || S.step === 'parts');
   panel.append(...[].concat(PANELS[S.step]()).filter(Boolean));
-  panel.scrollTop = scroll;
+  for (const e of panel.querySelectorAll('[data-scroll]')) e.scrollTop = S.scrolls[e.dataset.scroll] || 0;
+  panel.scrollTop = S.scrolls['panel-' + S.step] || 0;
 }
 
 // -- project files ---------------------------------------------------------------------------------------
@@ -513,7 +545,7 @@ $('#btn-save').onclick = async () => {
 $('#btn-open').onclick = () => $('#open-file').click();
 $('#open-file').onchange = async e => { const f = e.target.files[0]; if (f) await openProject(JSON.parse(await f.text())); };
 
-window.FF = { S, viewer, setBase, addPart, removePart, playClip, doExport, openProject, projectJson, render,
+window.FF = { S, viewer, thumbs, setBase, addPart, removePart, playClip, doExport, openProject, projectJson, render,
               setColour: (key, rgb) => { S.colours[key] = rgb; applyColours(); }, figureMaterials,
               get prints() { return prints; }, set prints(p) { prints = p; }, PrintEditor, attachCustom };
 
