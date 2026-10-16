@@ -63,3 +63,50 @@ def patch(dat_path, files):
             f.write(struct.pack('<IIII', off_hi, len(data), len(data), flags))
             done.append(path)
     return done
+
+
+def write_files(dat_path, files):
+    """Replace or ADD files: {path inside the archive: bytes}. New data and a rebuilt index go at the end of
+    the archive (on 2 KB boundaries); the header is pointed at the new index. Returns (replaced, added)."""
+    from . import datwrite
+    from .dat import DatArchive
+    arc = DatArchive(dat_path)
+    paths = [e.path for e in arc.entries]
+    arc.f.close()
+    by_lower = {p.lower(): p for p in paths}
+    with open(dat_path, 'r+b') as f:
+        info_off, info, version, count = _index(f)
+        raw = [struct.unpack_from('<IIII', info, 8 + 16 * i) for i in range(count)]
+        table = {paths[i]: raw[i] for i in range(count)}
+        order, _full, _recs, _dirs = datwrite.read_tree(info)
+        replaced, added = [], []
+        for path, data in files.items():
+            path = path.replace('/', '\\')
+            f.seek(0, 2)
+            end = f.tell()
+            f.write(b'\0' * ((-end) % 2048))
+            offset = f.tell()
+            f.write(data)
+            key = by_lower.get(path.lower())
+            if key:
+                flags = table[key][3] & 0xFFFF0000
+                table[key] = (offset >> 8, len(data), len(data), flags)
+                replaced.append(key)
+            else:
+                table[path] = (offset >> 8, len(data), len(data), 0)
+                added.append(path)
+        new_info = datwrite.build_index(version, table, order)
+        f.seek(0, 2)
+        end = f.tell()
+        f.write(b'\0' * ((-end) % 2048))
+        at = f.tell()
+        f.write(new_info)
+        f.seek(0)
+        a_old = struct.unpack('<I', f.read(4))[0]
+        if a_old & 0x80000000:
+            head_a = (~((at - 0x100) >> 8)) & 0xFFFFFFFF          # negative-encoded (LEGO Batman, Indy)
+        else:
+            head_a = at                                          # plain (Star Wars)
+        f.seek(0)
+        f.write(struct.pack('<II', head_a, len(new_info)))
+    return replaced, added
