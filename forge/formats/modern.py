@@ -20,9 +20,12 @@ ROLE = {'HEAD_FRONT': 1, 'HEAD_BACK': 2, 'BODY_FRONT': 3, 'BODY_BACK': 4, 'RIGHT
         'HAT_COLOUR': 9,
         # LEGO Pirates names one material per pair of arms, hands and legs (measured against the .cd roles of
         # jacksparrow_captain and elizabeth_redgown)
-        'ARMS': 5, 'HANDS': 6, 'LEGS': 8, 'SKIRT': 12}
+        'ARMS': 5, 'HANDS': 6, 'LEGS': 8, 'SKIRT': 12,
+        # LEGO Batman 3 writes the sides with an underscore
+        'RIGHT_ARM': 5, 'LEFT_ARM': 24, 'RIGHT_HAND': 6, 'LEFT_HAND': 26, 'RIGHT_LEG': 8, 'LEFT_LEG': 25}
 IDENTITY = [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0]
-SKELETON_MODELS = {'super_minifig': ('minifigs', 'super_characters', 'super_minifig', 'super_minifig_nxg.ghg')}
+SKELETON_MODELS = {'super_minifig': [('minifigs', 'super_characters', 'super_minifig', 'super_minifig_nxg.ghg'),
+                                     ('super_character', 'super_minifig', 'super_minifig_nxg.ghg')]}   # LEGO Batman 3
 
 
 _PAKS = {}
@@ -37,11 +40,15 @@ def _pak_index(chars_dir):
                 low = f.lower()
                 if low.endswith('_an4_nxg.pak'):
                     out.setdefault(low[:-len('_an4_nxg.pak')], os.path.join(dirpath, f))
-        # LEGO Pirates keeps its sets as '<set>.pac' of .an3 entries (used only where no .an4 pack exists)
-        for dirpath, _dirs, files in os.walk(chars_dir):
+        # LEGO Pirates keeps its sets as '<set>.pac' of .an3 entries (used only where no .an4 pack exists);
+        # LEGO Batman 3 as folders '<set>_as' of loose .an4 files
+        for dirpath, dirs, files in os.walk(chars_dir):
             for f in files:
                 if f.lower().endswith('.pac'):
                     out.setdefault(f.lower()[:-4], os.path.join(dirpath, f))
+            for dname in dirs:
+                if dname.lower().endswith('_as'):
+                    out.setdefault(dname.lower()[:-3], os.path.join(dirpath, dname))
         _PAKS[chars_dir] = out
     return _PAKS[chars_dir]
 
@@ -136,6 +143,8 @@ def _model_index(chars_dir):
                 low = f.lower()
                 if low.endswith(('_nxg.ghg', '_nxg.gsc')):
                     out.setdefault(low, os.path.join(dirpath, f))
+                elif low.endswith(('_dx11.ghg', '_dx11.gsc')):          # LEGO Batman 3, found by the same names
+                    out.setdefault(low.replace('_dx11.', '_nxg.'), os.path.join(dirpath, f))
         _MODELS[chars_dir] = out
     return _MODELS[chars_dir]
 
@@ -159,9 +168,13 @@ def load_clip(ref):
     """'<pack path>::<entry name>' -> the animation block for the main skeleton (the one with most nodes)."""
     from . import an3, pack, ttdeflate
     path, entry = ref.split('::', 1)
-    with open(path, 'rb') as f:
-        items = pack.read(f.read())[0]
-    data = next(x[2] for x in items if x[0] == entry)
+    if os.path.isdir(path):                         # LEGO Batman 3: a folder of loose files
+        with open(os.path.join(path, entry), 'rb') as f:
+            data = f.read()
+    else:
+        with open(path, 'rb') as f:
+            items = pack.read(f.read())[0]
+        data = next(x[2] for x in items if x[0] == entry)
     if ttdeflate.is_packed(data):
         data = ttdeflate.decompress(data)
     if data[4:8] == b'ANI9':                        # LEGO Pirates: one block after its size word
@@ -177,6 +190,15 @@ def texture_list(d):
     at = d.find(b'HGXT')
     if at < 0 or d[at + 8:at + 12] != b'ROTV':
         return None
+    if struct.unpack_from('>I', d, at + 4)[0] >= 12:
+        # LEGO Batman 3: one list; per entry a 16-byte hash, 4 bytes, a 1-byte name length, the name, a flag byte
+        n = struct.unpack_from('>I', d, at + 12)[0]
+        p, out = at + 16, []
+        for _ in range(n):
+            ln = d[p + 20]
+            out.append(ln > 1)
+            p += 22 + ln
+        return out
     try:
         m = struct.unpack_from('>I', d, at + 12)[0]
         p = at + 16 + 4 * m
@@ -245,8 +267,9 @@ def material_names(d):
 
 
 # material version -> where its texture numbers start, measured back from the name: LEGO Marvel 176 / 177 (helmets,
-# material remaps), LEGO Pirates 56 (hair, body and head maps), LEGO Batman 2 132 (body, head and arm templates)
-GAPS = {176: [564], 177: [564], 56: [497], 132: [514]}
+# material remaps), LEGO Pirates 56 (hair, body and head maps), LEGO Batman 2 132 (body, head and arm templates),
+# LEGO Batman 3 202 (plain parts: lego_white, then alpha; the normal maps sit 24 bytes earlier)
+GAPS = {176: [564], 177: [564], 56: [497], 132: [514], 202: [648]}
 
 
 def texture_slots(d, table, texture_count):
@@ -290,7 +313,15 @@ def texture_slot_gap(d, table, texture_count):
 
 
 def _find(root, rel):
-    """A path below root matched without regard to case (the archives' case varies)."""
+    """A path below root matched without regard to case (the archives' case varies). A name ending in '_nxg.*'
+    also finds LEGO Batman 3's '_dx11.*'."""
+    hit = _find_exact(root, rel)
+    if hit is None and rel and '_nxg.' in rel[-1].lower():
+        hit = _find_exact(root, list(rel[:-1]) + [rel[-1].lower().replace('_nxg.', '_dx11.')])
+    return hit
+
+
+def _find_exact(root, rel):
     cur = root
     for part in rel:
         try:
@@ -338,6 +369,7 @@ class Character:
             b['world'] = b['bind_local'] if b['parent'] < 0 else mat_mul(b['bind_local'], self.bones[b['parent']]['world'])
             self.bones.append(b)
         self.role_textures = {}
+        self.role_tints = {}        # LEGO Batman 3: a role's colour, multiplying its material's own map
         self.layer_choice = {}
         self.attachments = []
         for o in (x for r in self.cd.roots for x in ttstream.walk(r)):
@@ -348,8 +380,11 @@ class Character:
                 # LEGO Marvel: the role wears a named material of another model (a material remap)
                 self.role_textures.setdefault(g.get('Material'), ('material', g['Source Material Resource File'],
                                                                   g.get('Source Material') or ''))
+            elif o['class'] == 'Character Material' and isinstance(g.get('Layer 1 Tint Colour'), tuple):
+                # LEGO Batman 3: plain parts are the material's white map times this colour
+                self.role_tints[g.get('Material')] = g['Layer 1 Tint Colour']
             elif o['class'] == 'Character Layer Special':
-                self.layer_choice[g.get('Layer Id')] = g.get('Layer Special')
+                self.layer_choice[g.get('Layer Id', g.get('Layer'))] = g.get('Layer Special')
             elif o['class'] == 'Character Attachment':
                 self.attachments.append({k: g.get(k) for k in ('Attachment Name', 'Layer', 'Resource File', 'Locator', 'Tint Colour',
                                                                 'Object Name')})
@@ -528,13 +563,12 @@ class Character:
             hit = _find(self.chars_dir, rel)
             if hit:
                 return hit
-        known = SKELETON_MODELS.get(skeleton.lower())
-        if known:
+        for known in SKELETON_MODELS.get(skeleton.lower(), ()):
             hit = _find(self.chars_dir, known)
             if hit:
                 return hit
-        own = os.path.join(os.path.dirname(self.path), self.name + '_nxg.ghg')
-        if os.path.exists(own):
+        own = _find(os.path.dirname(self.path), [self.name + '_nxg.ghg'])
+        if own:
             return own
         # a definition naming its skeleton after a model of its own (capes, skinned hair): cape_nxg.ghg
         return _model_index(self.chars_dir).get(skeleton.lower() + '_nxg.ghg') if skeleton else None
@@ -554,7 +588,7 @@ class Character:
                 low = sp['name'].lower()
                 # without a choice: the plain variant (not the skeleton, mech, depth-only head, glove or
                 # break-apart pieces); big figures' pieces are not called '..._Mesh'
-                if want is None and ('skeleton' in low or 'mech' in low or low.startswith('zhead')
+                if want is None and ('skeleton' in low or 'mech' in low or 'robot' in low or low.startswith('zhead')
                                      or 'boxing' in low or 'breakup' in low):
                     continue
                 part = {'special': sp['name'], 'meshes': [m for m, _mat in sp['parts']],
@@ -638,6 +672,9 @@ class Character:
             # beard is a grey texture made black this way)
             geo = self.geometry(mesh_index)
             vc = bool(geo and geo[3] and any(c[:3] != (127, 127, 127) for c in geo[3]))
+        tint = self.role_tints.get(ROLE.get(role)) if mesh_index < 100000 else None
+        if tint is not None and not vc:
+            colour = (tint[0], tint[1], tint[2], 1.0)
         if mesh_index >= 100000:
             # an attachment's tint (hair colour, a cape's colour) multiplies its texture or vertex colours
             t = self.tints[mesh_index // 100000 - 1]
@@ -671,8 +708,11 @@ class Character:
             if not path:
                 continue
             try:
-                with open(path, 'rb') as f:
-                    items = pack.read(f.read())[0]
+                if os.path.isdir(path):
+                    items = [(f,) for f in sorted(os.listdir(path))]
+                else:
+                    with open(path, 'rb') as f:
+                        items = pack.read(f.read())[0]
             except (OSError, ValueError, struct.error):
                 continue
             for item in items:

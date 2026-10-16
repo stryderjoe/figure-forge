@@ -58,7 +58,7 @@ class MeshSection:
     def __init__(self, data):
         self.d = data
         at = data.find(b'HSEM')
-        while at >= 0 and struct.unpack_from('>I', data, at + 4)[0] not in (46, 47, 48, 161, 169):
+        while at >= 0 and struct.unpack_from('>I', data, at + 4)[0] not in (46, 47, 48, 161, 169, 175):
             at = data.find(b'HSEM', at + 4)
         if at < 0:
             raise MeshError('no MESH section of a known version')
@@ -66,22 +66,26 @@ class MeshSection:
         self.version = c.u32()
         self.old = self.version in (46, 47, 48)
         # LEGO Pirates' MESH 46 / 47 has the count without the marker, and 40-byte part tails (72 in LEGO Batman 2)
-        self.tail = 72
+        self.tail, self.pirates = 72, False
         if data[c.p:c.p + 4] == b'ROTV':
             c.p += 4
         elif self.version in (46, 47):
-            self.tail = 40
+            self.tail, self.pirates = 40, True
+        elif self.version == 175:
+            self.tail = 40                      # LEGO Batman 3: the count follows the version; 40-byte tails
         else:
             raise MeshError('MESH without ROTV')
         count = c.u32()
         self.buffers, self.parts, self.serial, refs = {}, [], 0, []
         for _ in range(count):
             part = {'streams': [], 'at': c.p}
+            if self.version == 175:
+                part['lead'] = c.u32()          # LEGO Batman 3: one more word before the stream count (1 seen)
             for _s in range(_streams(c.u32())):
                 key = self._buffer(c, 'vertex', refs)
                 part['streams'].append((key, c.u32()))
             short = c.u32()
-            if short and self.tail != 40:
+            if short and not self.pirates:
                 raise MeshError(f'unexpected field at {c.p - 4:#x}')
             part['index'] = self._buffer(c, 'index', refs)
             part['first_index'], part['index_count'], part['first_vertex'] = c.u32(), c.u32(), c.u32()
@@ -111,6 +115,15 @@ class MeshSection:
             # bytes; sparse = 13 bytes, u32 size, runs {u32 count, count vec3} (a last count without data: the
             # remaining vertices do not move), u32 n, n * u32. Kept as byte ranges; offsets read in morphs().
             part['morphs'] = []
+            if self.version == 175 and morphs:
+                # LEGO Batman 3 writes its expressions in a layout not read yet: they are skipped, and the next
+                # part is the first place after them that reads as a part start (the last part ends the section)
+                q = self._next_part175(c.p)
+                c.p = q if q is not None else self._mesh_end175(c.p)
+                self.serial += 3 * len(morphs)
+                part['skipped_morphs'] = len(morphs)
+                self.parts.append(part)
+                continue
             for target in morphs:
                 rec = c.p
                 dense = c.u32()
@@ -126,7 +139,7 @@ class MeshSection:
                     part['morphs'].append((target, 'runs', at_runs, size))
                     self.serial += bool(n)       # a target with an index list counts one record more
                 self.serial += 2
-            if self.tail == 40 and len(self.parts) + 1 < count:
+            if self.pirates and len(self.parts) + 1 < count:
                 # LEGO Pirates: the tail is 40 bytes or longer (not understood); the next part is the first
                 # place after it that reads as a part start
                 q = c.p + 40
@@ -139,7 +152,8 @@ class MeshSection:
                 c.take(self.tail)
             # a full record counts one record in LEGO Batman 2, none in LEGO Pirates (measured on shared
             # buffer references); a short one counts one
-            self.serial += 0 if self.tail == 40 else 1
+            # LEGO Batman 3 counts one record more per part (measured on shared buffer references)
+            self.serial += 0 if self.pirates else 2 if self.version == 175 else 1
             self.parts.append(part)
         self.end = c.p
         # buffer references count every buffer-like record read; find the base that makes them all fit
@@ -160,22 +174,53 @@ class MeshSection:
         self.parts = [p for p in self.parts if not p.get('short')] + [p for p in self.parts if p.get('short')]
 
     def _resolve_by_kind(self, refs):
-        """LEGO Pirates' faces: some records are counted in a way not yet understood, so one base does not fit
-        every reference. Each kind (vertex, index) then gets its own base: the one under which every reference
-        names an earlier buffer of its kind, choosing the most recent such buffers."""
+        """When one base does not fit every reference (LEGO Pirates' and LEGO Batman 3's faces: records counted in
+        ways not yet understood, or expressions skipped), references are resolved in groups: the offset that
+        makes the most of them name an earlier buffer of their kind first (the most recent buffers on a tie),
+        then the next offset for the rest, and so on."""
         for kind in ('vertex', 'index'):
-            mine = [r for r in refs if r[1] == kind]
-            if not mine:
-                continue
-            bases = None
-            for absolute, _kind, _slot, now in mine:
-                cands = {absolute - k for k, b in self.buffers.items() if b['kind'] == kind and absolute >= k and k < now}
-                bases = cands if bases is None else bases & cands
-            if not bases:
-                raise MeshError('buffer references do not resolve')
-            base = min(bases)
-            for absolute, _kind, slot, _now in mine:
-                slot[0] = absolute - base
+            left = [r for r in refs if r[1] == kind]
+            keys = sorted(k for k, b in self.buffers.items() if b['kind'] == kind)
+            while left:
+                votes = {}
+                for absolute, _kind, _slot, now in left:
+                    for k in keys:
+                        if k < now and absolute >= k:
+                            votes[absolute - k] = votes.get(absolute - k, 0) + 1
+                if not votes:
+                    raise MeshError('buffer references do not resolve')
+                base = min(votes, key=lambda b: (-votes[b], b))
+                done = []
+                for r in left:
+                    absolute, _kind, slot, now = r
+                    k = absolute - base
+                    if k in self.buffers and self.buffers[k]['kind'] == kind and k < now:
+                        slot[0] = k
+                        done.append(r)
+                if not done:
+                    raise MeshError('buffer references do not resolve')
+                left = [r for r in left if r not in done]
+
+    def _next_part175(self, p):
+        """The next LEGO Batman 3 part record after p: u32 1, a stream count of 1 to 4, then a new vertex buffer
+        ('DXTV' 12 bytes on) or a reference (0xC000nnnn, 1)."""
+        d = self.d
+        limit = self._mesh_end175(p)
+        q = d.find(b'\x00\x00\x00\x01', p)
+        while 0 <= q < limit:
+            if q % 1 == 0 and q + 32 <= len(d):
+                ns, tok = struct.unpack_from('>II', d, q + 4)
+                if 1 <= ns <= 4:
+                    if tok == 1 and d[q + 20:q + 24] == b'DXTV':
+                        return q
+                    if tok & 0xFFFF0000 == 0xC0000000 and struct.unpack_from('>I', d, q + 12)[0] == 1:
+                        return q
+            q = d.find(b'\x00\x00\x00\x01', q + 1)
+        return None
+
+    def _mesh_end175(self, p):
+        q = self.d.find(b'LTMU', p)
+        return len(self.d) if q < 0 else q - 4
 
     def _part_start(self, q):
         """Whether a part record (LEGO Pirates) starts at q: stream count 1 to 4, then a new vertex buffer with a
@@ -231,6 +276,7 @@ class MeshSection:
     def geometry(self, i):
         """(positions, normals, uvs, colours, triangles, skin) of part i; skin: per vertex [(bone, weight)]."""
         d, part = self.d, self.parts[i]
+        e = '<' if self.version == 175 else '>'          # LEGO Batman 3 (DX11) stores the data little-endian
         attrs = {}
         for key, off in part['streams']:
             b = self.buffers[key[0]]
@@ -247,11 +293,11 @@ class MeshSection:
             for v in range(n):
                 p = at + v * stride
                 if t in (2, 3, 4):
-                    out.append(struct.unpack_from(f'>{t}f', d, p))
+                    out.append(struct.unpack_from(f'{e}{t}f', d, p))
                 elif t == 5:
-                    out.append(struct.unpack_from('>2e', d, p))
+                    out.append(struct.unpack_from(e + '2e', d, p))
                 elif t == 6:
-                    out.append(struct.unpack_from('>4e', d, p))
+                    out.append(struct.unpack_from(e + '4e', d, p))
                 else:
                     out.append(tuple(d[p:p + 4]))
             return out
@@ -262,6 +308,8 @@ class MeshSection:
             nrm = [tuple((x - 127.5) / 127.5 for x in v[:3]) for v in nrm]
         uv = col(5)
         colour = col(2)
+        if colour and self.version == 175:
+            colour = [(c[2], c[1], c[0], c[3]) for c in colour]      # LEGO Batman 3 stores colours as BGRA
         skin = None
         if 9 in attrs and 10 in attrs:
             idx, wts = col(9), col(10)
@@ -275,7 +323,7 @@ class MeshSection:
                 tot = sum(acc.values()) or 1
                 skin.append(sorted(((b, w / tot) for b, w in acc.items()), key=lambda x: -x[1]))
         ib = self.buffers[part['index'][0]]
-        fmt = '>' + ('H' if ib['stride'] == 2 else 'I') * part['index_count']
+        fmt = e + ('H' if ib['stride'] == 2 else 'I') * part['index_count']
         idx = struct.unpack_from(fmt, d, ib['start'] + part['first_index'] * ib['stride'])
         tris = [idx[k:k + 3] for k in range(0, len(idx), 3)]
         return pos, nrm, uv, colour, tris, skin

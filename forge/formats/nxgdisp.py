@@ -21,6 +21,8 @@ def read(d, part_count):
         raise DispError('no display section')
     version, n = struct.unpack_from('>II', d, at + 4)
     p = at + 12 + n
+    if d[at + 8:at + 12] == b'ROTV':
+        p = at + 8                      # LEGO Batman 3 (DISP 32): no source path
     marked = d[p:p + 4] == b'ROTV'           # LEGO Pirates' DISP 7 / 8 has counts without the marker
     p += 4 if marked else 0
     nc_at = p
@@ -37,6 +39,17 @@ def read(d, part_count):
     clips, spans = [], []
     for _ in range(ncl):
         start = p
+        if version >= 32:
+            # LEGO Batman 3: u16 count, then (command, material) pairs
+            k = struct.unpack_from('>H', d, p)[0]
+            pairs = struct.unpack_from(f'>{2 * k}I', d, p + 2)
+            p += 2 + 8 * k
+            items, mats = pairs[0::2], pairs[1::2]
+            if any(i >= nc for i in items):
+                raise DispError('bad clip')
+            clips.append(list(zip(mats, items)))
+            spans.append((start, p))
+            continue
         p += 2
         m = struct.unpack_from('>I', d, p)[0]
         mats = struct.unpack_from(f'>{m}I', d, p + 4)
@@ -48,6 +61,10 @@ def read(d, part_count):
             raise DispError('bad clip')
         clips.append(list(zip(mats, items)))
         spans.append((start, p))
+    if version >= 32:
+        specials = _specials32(d, p, clips, commands, part_count)
+        return {'version': version, 'commands': commands, 'clips': clips, 'specials': specials,
+                'command_count_at': nc_at, 'clip_spans': spans}
     names = d.find(b'LBTN')
     names = names + 12 if names >= 0 else None
     end = d.find(b'TROP', p)
@@ -130,3 +147,30 @@ def _specials(d, q, end, names, clips, commands, part_count, need_name=False):
     if need_name and any(r['name'] == 'default_string' for r in out):
         return None             # the name table's first entry: not a real instance (Davy Jones' false match)
     return out
+
+
+def _specials32(d, p, clips, commands, part_count):
+    """LEGO Batman 3 (DISP 32): 'ROTV', count, then per instance: u16 name length, the name (zero-ended), a 16f
+    matrix, 12 floats of bounds, u32 clip, u32 flags, 4 more words (measured on super_minifig_dx11)."""
+    if d[p:p + 4] != b'ROTV':
+        raise DispError('specials not found')
+    count = struct.unpack_from('>I', d, p + 4)[0]
+    p += 8
+    out = []
+    for i in range(count):
+        ln = struct.unpack_from('>H', d, p)[0]
+        name = d[p + 2:p + 1 + ln].decode('latin1')
+        body = p + 2 + ln
+        matrix = struct.unpack_from('>16f', d, body)
+        clip, flags = struct.unpack_from('>II', d, body + 112)
+        parts = []
+        if clip < len(clips):
+            for mat, ci in clips[clip]:
+                op, _fl, value = commands[ci]
+                if op in (0x80, 0xB3) and value < part_count:
+                    parts.append((value, mat))
+        out.append({'name': name, 'matrix': matrix, 'clip': clip, 'flags': flags, 'parts': parts,
+                    'size': 2 + ln + 136, 'at': p, 'clip_at': body + 112})
+        p = body + 136
+    return out
+

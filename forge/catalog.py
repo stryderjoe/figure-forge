@@ -24,13 +24,17 @@ GAMES = OrderedDict((
     ('lb2', 'LEGO Batman 2: DC Super Heroes'),
     ('lmsh', 'LEGO Marvel Super Heroes'),
     ('pirates', 'LEGO Pirates of the Caribbean'),
+    ('lb3', 'LEGO Batman 3: Beyond Gotham'),
 ))
 # games that share file formats form one era (a mode of the program)
 ERAS = OrderedDict((
     ('classic', {'title': 'Classic (2007 to 2008)', 'games': ['lb1', 'indy', 'tcs']}),
     ('nxg', {'title': 'Super-hero era (2011 to 2013)', 'games': ['pirates', 'lb2', 'lmsh']}),
+    # LEGO Batman 3 (DX11): the same kinds of files in newer versions (little-endian vertex data, names written
+    # in place, tint colours for plain parts), so a mode of its own
+    ('dx11', {'title': 'Beyond Gotham era (2014)', 'games': ['lb3']}),
 ))
-MODERN = {'pirates', 'lb2', 'lmsh'}
+MODERN = {'pirates', 'lb2', 'lmsh', 'lb3'}
 
 
 def era_of(game_id):
@@ -62,6 +66,8 @@ def guess_game(root):
         return 'indy'
     if 'lukeskywalker' in names or 'darthvader' in names or 'chewbacca' in names:
         return 'tcs'
+    if 'super_character' in names and 'minifig' in names:
+        return 'lb3'
     figs = classic.listing(os.path.join(chars, names['minifigs'])) if 'minifigs' in names else {}
     if 'ironman' in figs or 'spiderman' in figs or 'hulk' in figs:
         return 'lmsh'
@@ -90,11 +96,13 @@ class Game:
             out = []
             for kind in sorted(os.listdir(self.chars_dir), key=str.lower):
                 kdir = os.path.join(self.chars_dir, kind)
-                if not os.path.isdir(kdir) or kind.lower() not in ('minifigs', 'bigfigs', 'creatures'):
+                # LEGO Batman 3 names the kinds in the singular
+                if not os.path.isdir(kdir) or kind.lower() not in ('minifigs', 'bigfigs', 'creatures', 'minifig',
+                                                                   'bigfig', 'creature'):
                     continue
                 for folder in sorted(os.listdir(kdir), key=str.lower):
                     path = os.path.join(kdir, folder)
-                    if not os.path.isdir(path) or folder.lower() == 'super_characters':
+                    if not os.path.isdir(path) or folder.lower() in ('super_characters', 'super_character'):
                         continue
                     for f in sorted(os.listdir(path), key=str.lower):
                         if f.lower().endswith('.cd'):

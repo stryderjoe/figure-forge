@@ -45,7 +45,10 @@ def read_all(d):
     at = d.find(b'LOGH')
     while at >= 0:
         try:
-            out.append(_parse(d, at, nm))
+            if struct.unpack_from('>I', d, at + 4)[0] >= 16:
+                out.append(_parse16(d, at))
+            else:
+                out.append(_parse(d, at, nm))
         except (SkelError, struct.error, IndexError):
             pass
         at = d.find(b'LOGH', at + 4)
@@ -105,4 +108,71 @@ def _parse(d, at, nm):
         layers.append({'name': nm(off), 'first': first, 'rigid': rigid, 'skinned': skinned,
                        'items': meta[first:first + rigid + skinned]})
     return {'at': at, 'version': ver, 'joints': joints, 'locators': locators, 'remap': remap,
+            'meta': meta, 'layers': layers, 'end': p}
+
+
+def _parse16(d, at):
+    """LEGO Batman 3 (HGOL 16): the same lists, each behind a 'ROTV' count marker, with names written in place
+    (u16 length, then the zero-ended text) instead of name-table offsets (measured on super_minifig_dx11)."""
+    p = at + 8
+
+    def count(p):
+        if d[p:p + 4] != b'ROTV':
+            raise SkelError(f'list marker missing at {p:#x}')
+        return struct.unpack_from('>I', d, p + 4)[0], p + 8
+
+    def name(p):
+        ln = struct.unpack_from('>H', d, p)[0]
+        return d[p + 2:p + 1 + ln].decode('latin1'), p + 2 + ln
+
+    n, p = count(p)
+    if not 0 < n < 256:
+        raise SkelError('joint count')
+    joints = []
+    for i in range(n):
+        nm, p = name(p)
+        orient, _ = _rd(d, p, '16f')
+        loc, _ = _rd(d, p + 64, '3f')
+        par, flags = d[p + 76], d[p + 77]
+        if par != 255 and par >= i:
+            raise SkelError('parent after child')
+        joints.append({'name': nm, 'parent': None if par == 255 else par, 'flags': flags,
+                       'orient': orient, 'locator': loc})
+        p += 78
+    for field in ('bind', 'inverse_bind'):
+        c, p = count(p)
+        if c != n:
+            raise SkelError('bind matrix count differs')
+        for j in joints:
+            j[field], p = _rd(d, p, '16f')
+    c, p = count(p)
+    p += c
+    c, p = count(p)
+    locators = []
+    for _ in range(c):
+        nm, p = name(p)
+        m, _x = _rd(d, p, '16f')
+        locators.append({'name': nm, 'matrix': m, 'joint': d[p + 64]})
+        p += 65
+    c, p = count(p)
+    remap = list(d[p:p + c])
+    p += c
+    (c,), p = _rd(d, p, 'I')                     # a list without a marker (empty in the minifig)
+    p += c
+    c, p = count(p)
+    meta = []
+    for _ in range(c):
+        (special,), _x = _rd(d, p + 2, 'H')
+        meta.append({'kind': d[p], 'joint': d[p + 1], 'special': special, 'layer': d[p + 4]})
+        p += 5
+    c, p = count(p)
+    if c > 256:
+        raise SkelError('layer count')
+    layers = []
+    for _ in range(c):
+        nm, p = name(p)
+        (first, rigid, skinned), p = _rd(d, p, 'HHH')
+        layers.append({'name': nm, 'first': first, 'rigid': rigid, 'skinned': skinned,
+                       'items': meta[first:first + rigid + skinned]})
+    return {'at': at, 'version': 16, 'joints': joints, 'locators': locators, 'remap': remap,
             'meta': meta, 'layers': layers, 'end': p}

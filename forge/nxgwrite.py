@@ -311,8 +311,8 @@ class NxgWriter:
         sp.put(s0, clip, s1 - s0)
         # every piece of the Body layer draws that clip
         for sp_index in self._body_specials():
-            rec_at = self.disp['specials'][sp_index]['at']
-            sp.put(rec_at + 180, struct.pack('>I', body_clip))
+            rec = self.disp['specials'][sp_index]
+            sp.put(rec.get('clip_at', rec['at'] + 180), struct.pack('>I', body_clip))
 
         # 6. the main block's length word; the new name in the resource header and the display list's path
         q = d.find(b'02UN')

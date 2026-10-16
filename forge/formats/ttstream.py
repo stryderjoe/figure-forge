@@ -23,7 +23,7 @@ import struct
 MARK = bytes([11, 0, 0, 0]) + b'StreamInfo' + bytes([0])
 
 
-LAYOUT = {25: (3, 4), 24: (5, 4), 22: (5, 2)}       # stream version -> (object header bytes, list count bytes), measured
+LAYOUT = {29: (4, 4), 28: (4, 4), 25: (3, 4), 24: (5, 4), 22: (5, 2)}       # stream version -> (object header bytes, list count bytes), measured
 
 
 class StreamError(ValueError):
@@ -31,7 +31,7 @@ class StreamError(ValueError):
 
 
 FIXED = {'Char': 1, 'Short': 2, 'Int': 4, 'Int64': 8, 'Float': 4, 'Colour3': 12, 'Vec3': 12, 'Vec4': 16,
-         'Mtx': 64, 'Half': 2, 'HalfVec3': 6, 'Ptr': 4}
+         'Mtx': 64, 'Half': 2, 'HalfVec3': 6, 'Ptr': 4, 'UChar': 1, 'NuHSpecial': 24}
 
 
 class Reader:
@@ -127,6 +127,8 @@ class Stream:
                 t = r.u32()
                 fname = r.str()
                 a, b, c, d = struct.unpack('<IIIi', r.raw(16))
+                if self.version >= 28:
+                    r.raw(4)                       # LEGO Batman 3 (versions 28, 29): one more word per field
                 # a field whose first flag word is 0x8000000N with N = 2 holds an object of class t, inline
                 inline = bool(c & 0x80000000)
                 cls['fields'].append({'type': ('inline', t) if inline else
@@ -218,7 +220,7 @@ class Stream:
                 return struct.unpack('<3f', raw)
             if t == 'Vec4':
                 return struct.unpack('<4f', raw)
-            if t == 'Char':
+            if t in ('Char', 'UChar'):
                 return raw[0]
             if t == 'Short':
                 return struct.unpack('<h', raw)[0]
