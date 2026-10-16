@@ -110,7 +110,7 @@ def nxg_files_for(game, base_char, glb, mode, name='', report=print):
                  f'{folder}{BS}{stem}_nxg.nxg_textures': out['nxg_textures'],
                  f'{folder}{BS}{stem}_nxg.pc_shaders': shaders}
     ref = BS.join(rel + [stem.upper()])
-    cd = nxgwrite.definition(base_char, ref)
+    cd = list_model(nxgwrite.definition(base_char, ref), folder, stem, 'lmsh')
     if new is None:
         files[archive_path(game.root, base_char.path)] = cd
         report(f'{base_char.name} now wears the figure (model {stem}_nxg.ghg).')
@@ -118,6 +118,22 @@ def nxg_files_for(game, base_char, glb, mode, name='', report=print):
     files.update(nxg_new_character(game, base_char, new, cd))
     report(f'{new} joins the character list (from {base_char.name}, model {stem}_nxg.ghg).')
     return files
+
+
+def list_model(cd, folder, stem, game_id):
+    """A definition with a resource header (LEGO Marvel) lists every model it names, one per platform, as the
+    games' build does (abomb.cd lists abomb_nxg.ghg and abomb_dx11.ghg): the figure's model is added to the
+    list. A definition without a header (LEGO Batman 2, LEGO Pirates) is returned as it is."""
+    from .formats import hser
+    if not hser.has_header(cd):
+        return cd
+    h, end = hser.read(cd)
+    if not h['tree']:
+        return cd
+    where = folder.replace(BS, '/').lower()
+    for path, type_, platforms, usage, param in hser.model_paths(where, stem, game_id):
+        hser.add_file(h, path, type_, platforms, usage, param)
+    return hser.write(h) + cd[end:]
 
 
 def nxg_new_character(game, base_char, new, cd):

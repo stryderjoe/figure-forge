@@ -86,6 +86,13 @@ def main(work, glb_path, base):
     arc.f.close()
     ch = modern.Character(os.path.join(look, *cd_path.split(BS)), os.path.join(look, 'chars'))
     check(os.path.basename(ch.model_path).lower() == f'{stem}_nxg.ghg', 'the definition names the new model')
+    from forge.formats import hser
+    cd_bytes = open(os.path.join(look, *cd_path.split(BS)), 'rb').read()
+    if hser.has_header(cd_bytes):
+        # LEGO Marvel: the definition's resource header lists the model, as the games' build lists every model
+        listed = set(hser.paths(hser.read(cd_bytes)[0]).values())
+        want = model_path.replace(BS, '/').lower()
+        check(want in listed, f'its resource header lists {want}')
     check(not ch.role_textures and not ch.attachments, 'no textures or attachments of its own')
     check(ch.default_layers == {2}, 'only the Body layer is shown')
     meshes = [m for p in ch.layers[2]['parts'] for m in p['meshes']]
