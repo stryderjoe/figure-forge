@@ -470,6 +470,8 @@ class Character:
             blended = {x['name'].lower() for x in first}
             first = [x for x in first if not (x['name'].lower().endswith('_nonblended') and
                                               x['name'].lower()[:-len('_nonblended')] in blended)]
+            if not named and not ingame:
+                first = self._own_layer_choice(stem, am, specials, first)
             chosen = named or ingame or first or specials[:1]
             posed_pair = False                  # (bind, idle) worlds of the attachment's own definition, when read
             # a rigid piece of the attachment sits on a joint of its own skeleton: its vertices are in that
@@ -710,6 +712,34 @@ class Character:
             if o['class'] == 'Character Texture' and isinstance(g.get('Texture File'), str):
                 roles[g.get('Material')] = g['Texture File']
         return path, root['fields'].get('Scene Object') or '', roles
+
+    def _own_layer_choice(self, stem, am, specials, first):
+        """The pieces an attachment's own definition shows: its Default Layers pick layers of its model's skeleton
+        (LEGO Batman 3: face_batman2014.cd shows layers 0 and 1, the face and the eyeholes; face_lexluthor.cd only
+        layer 0, without the target). A model without a skeleton of its own (face_batman: FACE, ElectroFlash,
+        Hat_SensorGoggles, Eyes) shows only its FACE under layer 0 alone. Without such a definition: first."""
+        cd = _cd_index(self.chars_dir).get(stem.lower() + '.cd')
+        if not cd:
+            return first
+        try:
+            root = ttstream.Stream(open(cd, 'rb').read()).roots[0][0]
+        except (ttstream.StreamError, struct.error, ValueError, IndexError, OSError):
+            return first
+        mask = root['fields'].get('Default Layers')
+        if not isinstance(mask, int) or mask <= 0:
+            return first
+        layers = am.skeletons[0]['layers'] if am.skeletons else []
+        if layers:
+            keep = set()
+            for li, layer in enumerate(layers):
+                if mask >> li & 1:
+                    keep.update(item['special'] for item in layer['items'])
+            out = [x for x in first if specials.index(x) in keep]
+            return out or first
+        if mask == 1:
+            out = [x for x in first if x['name'].lower() == 'face']
+            return out or first
+        return first
 
     def _attachment_tint(self, att, stem):
         """The attachment's tint times that of a definition of the same name beside its model (LEGO Batman 3's
