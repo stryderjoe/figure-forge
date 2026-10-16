@@ -440,7 +440,7 @@ class Character:
                 continue
             k = len(self.attached)
             self.attached.append(am)
-            self.tints.append(tuple(att.get('Tint Colour') or (1.0, 1.0, 1.0)))
+            self.tints.append(self._attachment_tint(att, stem))
             base = 100000 * (k + 1)
             # the object the definition names, else the first (the most detailed)
             want = (att.get('Object Name') or '').lower()
@@ -581,6 +581,22 @@ class Character:
                                                        'meshes': meshes, 'mats': mats,
                                                        'matrix': list(locators[li]['matrix'])}],
                             'from_layer': att.get('Layer')})
+
+    def _attachment_tint(self, att, stem):
+        """The attachment's tint times that of a definition of the same name beside its model (LEGO Batman 3's
+        skinnedhair_mediumwavy.cd: blonde; its _black and _red copies are other definitions of the same model)."""
+        t = tuple(att.get('Tint Colour') or (1.0, 1.0, 1.0))
+        cd = _cd_index(self.chars_dir).get(stem.lower() + '.cd')
+        if not cd:
+            return t
+        try:
+            root = ttstream.Stream(open(cd, 'rb').read()).roots[0][0]
+        except (ttstream.StreamError, struct.error, ValueError, IndexError, OSError):
+            return t
+        dt = root['fields'].get('Default Tint Colour')
+        if not (isinstance(dt, tuple) and len(dt) >= 3):
+            return t
+        return (t[0] * dt[0], t[1] * dt[1], t[2] * dt[2])
 
     def _model(self, override, skeleton):
         if override:
