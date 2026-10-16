@@ -1,5 +1,5 @@
-"""Write a classic TT .DAT archive's index, so files can be ADDED (LEGO Batman 2008 and Indiana Jones 1:
-index -2; LEGO Star Wars TCS: index -3).
+"""Write a TT .DAT archive's index, so files can be ADDED (LEGO Batman 2008 and Indiana Jones 1:
+index -2; LEGO Star Wars TCS: index -3; LEGO Batman 2: index -4).
 
 Index, measured on the three games' archives (2026-10-15):
     i32 version, i32 file count n,
@@ -104,13 +104,15 @@ def build_index(version, files, order=None, names_pad=None):
 
     records.append([0, 0, add_name('')])
     walk(tree, '', 0)
-    if version == -3:
+    if version in (-3, -4):
         listed = sorted(file_paths, key=path_hash)
     else:
         listed = list(file_paths)
-    # the tree numbers files in tree order in both kinds; -3 lists the file table (and hashes) by hash
+    # the tree numbers files in tree order in -2 and -3 (-3 lists the file table and hashes by hash); in -4
+    # (LEGO Batman 2) a file's record names its place in the hash-sorted table directly
+    place = {p: i for i, p in enumerate(listed)}
     for n, idx in enumerate(file_recs):
-        records[idx][0] = -n
+        records[idx][0] = -place[file_paths[n]] if version == -4 else -n
     out = bytearray(struct.pack('<ii', version, len(listed)))
     for p in listed:
         out += struct.pack('<IIII', *files[p])
@@ -119,6 +121,78 @@ def build_index(version, files, order=None, names_pad=None):
         out += struct.pack('<hhi', nx, pv, no)
     # the originals pad the names (by 1 to 7 bytes, by no rule found); 4-byte alignment is used for new ones
     names += b'\0' * (names_pad if names_pad is not None else (-len(names)) % 4)
+    out += struct.pack('<i', len(names)) + bytes(names)
+    out += b''.join(struct.pack('<I', path_hash(p)) for p in listed) + b'\0' * 8
+    return bytes(out)
+
+
+def build_index_linked(info, old_paths, files):
+    """Index -4 (LEGO Batman 2) with files added, keeping the archive's own name records: there a folder's first
+    child follows it directly and every later child points back to its previous sibling, in no depth-first order,
+    so new records go at the end (a new folder directly followed by its first child) and each folder's last-child
+    number follows. old_paths: the archive's paths by file number; files: {path: (off_hi, zsize, size, flags)}
+    for every file, old and new. File numbers are places in the table sorted by path hash."""
+    version, count = struct.unpack_from('<ii', info, 0)
+    pos = 8 + 16 * count
+    (nrec,) = struct.unpack_from('<i', info, pos)
+    recs = [list(struct.unpack_from('<hhi', info, pos + 4 + 8 * i)) for i in range(nrec)]
+    pos += 4 + 8 * nrec
+    (nsz,) = struct.unpack_from('<i', info, pos)
+    names = bytearray(info[pos + 4:pos + 4 + nsz])
+
+    def name_of(off):
+        return names[off:names.index(b'\0', off)].decode('latin1')
+
+    # every record's full path, as the reader finds it
+    full, parent, last_dir = [''] * nrec, [''] * nrec, 0
+    dirs = {'': 0}
+    for i, (nxt, prev, noff) in enumerate(recs):
+        if i == 0:
+            continue
+        parent[i] = parent[prev] if prev else full[last_dir]
+        full[i] = f'{parent[i]}\\{name_of(noff)}' if parent[i] else name_of(noff)
+        if nxt > 0:
+            last_dir = i
+            dirs[full[i].lower()] = i
+    listed = sorted(files, key=path_hash)
+    place = {p.lower(): i for i, p in enumerate(listed)}
+    old = {p.lower() for p in old_paths}
+    for i, (nxt, _prev, _noff) in enumerate(recs):
+        if i and nxt <= 0 and full[i].lower() in place:
+            recs[i][0] = -place[full[i].lower()]
+
+    def add(parent_index, name, nxt):
+        at = len(names)
+        names.extend(name.encode('latin1') + b'\0')
+        last = recs[parent_index][0]
+        prev = last if last > 0 and parent_index not in fresh else 0
+        recs.append([nxt, prev, at])
+        idx = len(recs) - 1
+        recs[parent_index][0] = idx
+        fresh.discard(parent_index)
+        return idx
+
+    fresh = set()                                   # new folders that have no child yet
+    for path in files:
+        if path.lower() in old:
+            continue
+        parts = path.split('\\')
+        cur, here = '', 0
+        for d in parts[:-1]:
+            cur = f'{cur}\\{d}' if cur else d
+            if cur.lower() not in dirs:
+                idx = add(here, d, 1)
+                dirs[cur.lower()] = idx
+                fresh.add(idx)
+            here = dirs[cur.lower()]
+        add(here, parts[-1], -place[path.lower()])
+    out = bytearray(struct.pack('<ii', version, len(listed)))
+    for p in listed:
+        out += struct.pack('<IIII', *files[p])
+    out += struct.pack('<i', len(recs))
+    for nx, pv, no in recs:
+        out += struct.pack('<hhi', nx, pv, no)
+    names += b'\0' * ((-len(names)) % 4)
     out += struct.pack('<i', len(names)) + bytes(names)
     out += b''.join(struct.pack('<I', path_hash(p)) for p in listed) + b'\0' * 8
     return bytes(out)

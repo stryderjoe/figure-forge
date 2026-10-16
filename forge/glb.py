@@ -120,6 +120,8 @@ class Glb:
                 extras = n.get('extras') or {}
                 rec = {'node': i, 'name': n.get('name', ''), 'uv': uv, 'indices': idx, 'material': prim.get('material'),
                        'slot': extras.get('slot', ''), 'part': extras.get('part', '')}
+                if 'COLOR_0' in attr:                  # linear vertex colours (faces of the newer games)
+                    rec['colours'] = self.accessor(attr['COLOR_0']).astype(np.float64)
                 if skin is not None and 'JOINTS_0' in attr:
                     # skinned: vertices are in the mesh node's space at bind; bring them to the scene's
                     rec['positions'] = (np.c_[pos, np.ones(len(pos))] @ world.T)[:, :3]

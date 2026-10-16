@@ -23,6 +23,7 @@ def read(d, part_count):
     p = at + 12 + n
     marked = d[p:p + 4] == b'ROTV'           # LEGO Pirates' DISP 7 / 8 has counts without the marker
     p += 4 if marked else 0
+    nc_at = p
     nc = struct.unpack_from('>I', d, p)[0]
     p += 4
     commands = [struct.unpack_from('>BBI', d, p + 6 * i) for i in range(nc)]
@@ -33,8 +34,9 @@ def read(d, part_count):
         p += 4
     ncl = struct.unpack_from('>I', d, p)[0]
     p += 4
-    clips = []
+    clips, spans = [], []
     for _ in range(ncl):
+        start = p
         p += 2
         m = struct.unpack_from('>I', d, p)[0]
         mats = struct.unpack_from(f'>{m}I', d, p + 4)
@@ -45,6 +47,7 @@ def read(d, part_count):
         if m != k or any(i >= nc for i in items):
             raise DispError('bad clip')
         clips.append(list(zip(mats, items)))
+        spans.append((start, p))
     names = d.find(b'LBTN')
     names = names + 12 if names >= 0 else None
     end = d.find(b'TROP', p)
@@ -62,7 +65,8 @@ def read(d, part_count):
         specials = (_specials(d, q, end, names, clips, commands, part_count) if marked
                     else _specials(d, q - 4, end, names, clips, commands, part_count, need_name=True))
         if specials is not None:
-            return {'version': version, 'commands': commands, 'clips': clips, 'specials': specials}
+            return {'version': version, 'commands': commands, 'clips': clips, 'specials': specials,
+                    'command_count_at': nc_at, 'clip_spans': spans}
         q += 4 if marked else 1
 
 
@@ -99,7 +103,7 @@ def _record(d, p, end, names, clips, commands, part_count, i, strict=False):
                     return None
                 parts.append((value, mat))
     return {'name': name, 'matrix': matrix, 'clip': clip, 'flags': flags, 'parts': parts,
-            'size': 204 + 4 * ranges}
+            'size': 204 + 4 * ranges, 'at': p}
 
 
 def _specials(d, q, end, names, clips, commands, part_count, need_name=False):

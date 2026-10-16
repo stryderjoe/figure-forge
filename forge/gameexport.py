@@ -13,13 +13,16 @@ import shutil
 from . import gamewrite, newchar
 from .formats import classic, datpatch
 
+NXG_EXPORT = {'lb2'}                    # super-hero era games the figure can be written into
 INSTALL_GUESSES = {
+    'lb2': ('LEGO Batman 2',),
     'lb1': ('Lego Batman',),
     'indy': ('LEGO Indiana Jones The Original Adventures',),
     'tcs': ('Lego Star Wars Saga',),
 }
 STEAM_ROOTS = (r'C:\Program Files (x86)\Steam\steamapps\common', r'C:\Program Files\Steam\steamapps\common')
 BACKUP = '.figureforge-backup'
+BS = '\\'
 
 
 class ExportError(ValueError):
@@ -44,7 +47,12 @@ def archive_path(game_root, path):
 
 
 def files_for(game, base_char, glb, mode, name='', report=print):
-    """{archive path: bytes} for the figure. game: catalog.Game; base_char: classic.Character of the body."""
+    """{archive path: bytes} for the figure. game: catalog.Game; base_char: classic.Character of the body
+    (modern.Character in the super-hero era)."""
+    if game.id in NXG_EXPORT:
+        return nxg_files_for(game, base_char, glb, mode, report)
+    if game.id in ('pirates', 'lmsh'):
+        raise ExportError(f'putting figures into {game.title} is not built yet')
     txt = classic.character_txt(base_char.path)
     model = gamewrite.write_figure(open(base_char.path, 'rb').read(), glb, game.id, txt, report=report)
     if mode == 'replace':
@@ -62,6 +70,23 @@ def files_for(game, base_char, glb, mode, name='', report=print):
             raise ExportError(f'{name} is already a character of this game')
         return newchar.build(game.root, base_char.path, name, model, upper=game.id == 'tcs')
     raise ExportError('mode must be replace or new')
+
+
+def nxg_files_for(game, base_char, glb, mode, report=print):
+    """LEGO Batman 2: the figure as a model of its own beside the shared one, and the body's definition pointed
+    at it (see nxgwrite). Only replacing the body is built."""
+    from . import nxgwrite
+    if mode != 'replace':
+        raise ExportError(f'adding a new character to {game.title} is not built yet: replace a character instead')
+    stem = re.sub(r'[^a-z0-9_]', '_', base_char.name.lower())[:24] + '_ff'
+    writer = nxgwrite.NxgWriter(base_char)
+    model = writer.write(glb, stem, report=report)
+    files = {
+        f'chars{BS}minifigs{BS}figureforge{BS}{stem}_nxg.ghg': model,
+        archive_path(game.root, base_char.path): nxgwrite.definition(base_char, f'MiniFigs{BS}FigureForge{BS}{stem.upper()}'),
+    }
+    report(f'{base_char.name} now wears the figure (model {stem}_nxg.ghg).')
+    return files
 
 
 def patch(install, files):

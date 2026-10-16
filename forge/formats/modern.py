@@ -180,21 +180,23 @@ def material_table(d):
     b = len(d) if b < 0 else b
     starts = [m.start() + a for m in re.finditer(re.escape(bytes([0, 0, 0, 2])), d[a:b])]
 
+    pirates = struct.unpack_from('>I', d, a + 4)[0] == 56
+
     def name(at):
         if at + 4 > len(d):
             return None
+        if pirates:
+            # LEGO Pirates: u32 length, the text without a closing zero (774 bytes into the record, measured)
+            n = struct.unpack_from('>I', d, at)[0]
+            text = d[at + 4:at + 4 + n] if 2 <= n < 120 else b''
+            return text.decode() if text and re.fullmatch(rb'[A-Za-z_][A-Za-z0-9_:.\- ]+', text) else None
         n = struct.unpack_from('>H', d, at)[0]
-        text = d[at + 2:at + 2 + n]
-        if 3 <= n < 120 and text.endswith(bytes([0])) and re.fullmatch(rb'[A-Za-z_][A-Za-z0-9_:.\- ]+', text[:-1]):
+        text = d[at + 2:at + 2 + n] if 3 <= n < 120 else b''
+        if text.endswith(bytes([0])) and re.fullmatch(rb'[A-Za-z_][A-Za-z0-9_:.\- ]+', text[:-1]):
             return text[:-1].decode()
-        # LEGO Pirates: u32 length, the text without a closing zero (774 bytes into the record, measured)
-        n = struct.unpack_from('>I', d, at)[0]
-        text = d[at + 4:at + 4 + n]
-        if 2 <= n < 120 and re.fullmatch(rb'[A-Za-z_][A-Za-z0-9_:.\- ]+', text):
-            return text.decode()
         return None
 
-    if struct.unpack_from('>I', d, a + 4)[0] == 56:
+    if pirates:
         k = 774                 # LEGO Pirates: fixed (a one-material hat gives too few records to vote)
     else:
         hits = collections.Counter({k: sum(1 for c in starts if name(c + k)) for k in range(0x200, 0x700)})
@@ -214,6 +216,11 @@ def material_names(d):
     return [n for n, _ in material_table(d)]
 
 
+# material version -> where its texture numbers start, measured back from the name: LEGO Marvel 176 / 177 (helmets,
+# material remaps), LEGO Pirates 56 (hair, body and head maps), LEGO Batman 2 132 (body, head and arm templates)
+GAPS = {176: [564], 177: [564], 56: [497], 132: [514]}
+
+
 def texture_slots(d, table, texture_count):
     """Per material the 18 texture numbers of its record (-1 = none; slot 0 is the colour map). They end a
     fixed distance before the name: 564 bytes in LEGO Marvel's material versions 176 and 177 (measured on
@@ -221,9 +228,7 @@ def texture_slots(d, table, texture_count):
     colour maps are set."""
     a = d.find(b'LTMU')
     version = struct.unpack_from('>I', d, a + 4)[0] if a >= 0 else 0
-    # LEGO Pirates (version 56): records are byte-packed; the numbers start 497 bytes before the name's length
-    # word (measured on super_minifig: hair, body and head maps land on their own images)
-    gaps = [564] if version in (176, 177) else [497] if version == 56 else list(range(520, 640, 4))
+    gaps = GAPS.get(version) or list(range(520, 640, 4))
     slots = 16 if version == 56 else 18        # LEGO Pirates has 16 (two other numbers follow)
     best = None
     for gap in gaps:
@@ -236,8 +241,24 @@ def texture_slots(d, table, texture_count):
             continue
         score = sum(1 for r in rows if r[0] >= 0)
         if best is None or score > best[0]:
-            best = (score, rows)
+            best = (score, rows, gap)
     return best[1] if best else [None] * len(table)
+
+
+def texture_slot_gap(d, table, texture_count):
+    """The distance from a material's name back to its texture numbers (as texture_slots finds it), or None."""
+    rows = texture_slots(d, table, texture_count)
+    if not rows or rows[0] is None:
+        return None
+    a = d.find(b'LTMU')
+    version = struct.unpack_from('>I', d, a + 4)[0]
+    slots = 16 if version == 56 else 18
+    gaps = GAPS.get(version) or list(range(520, 640, 4))
+    for gap in gaps:
+        if all(struct.unpack_from(f'>{slots}i', d, at - gap) + (-1,) * (18 - slots) == tuple(r)
+               for (_n, at), r in zip(table, rows)):
+            return gap
+    return None
 
 
 def _find(root, rel):

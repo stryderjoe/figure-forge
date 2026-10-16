@@ -172,10 +172,12 @@ class Stream:
         start = end - size
         here = chain + (start,)
         cls = self.classes[ci]
-        obj = {'class': cls['name'], 'id': r.raw(self.id_size), 'fields': {}, 'components': {}, 'span': (start, end)}
+        obj = {'class': cls['name'], 'id': r.raw(self.id_size), 'fields': {}, 'components': {}, 'span': (start, end),
+               'at': {}, 'chain': here}
         mark = len(self.strings)
         try:
             for f in cls['fields']:
+                obj['at'][f['name']] = r.p          # where the value is (for edits that keep its size)
                 obj['fields'][f['name']] = self._value(r, f, here)
                 if r.p > end:
                     raise StreamError('past the end')
@@ -198,8 +200,9 @@ class Stream:
         t = f['type']
         if isinstance(t, tuple):
             cls = self.classes[t[1]]
-            out = {'class': cls['name'], 'fields': {}, 'components': {}, 'inline': True}
+            out = {'class': cls['name'], 'fields': {}, 'components': {}, 'inline': True, 'at': {}}
             for g in cls['fields']:
+                out['at'][g['name']] = r.p
                 out['fields'][g['name']] = self._value(r, g, chain)
             return out
         if t == 'String':
@@ -240,3 +243,44 @@ def walk(objs):
                 yield from walk([v])
         for lst in o['components'].values():
             yield from walk(lst)
+
+
+def edit(stream, removes=(), strings=None, values=None):
+    """A copy of the stream's bytes with objects removed, strings replaced and fixed-size values overwritten.
+    removes: objects (from .roots) to cut out, with their list counts lowered; strings: {offset of the length
+    word: new text}; values: {offset: bytes of the same size}. Every enclosing node's size follows the change."""
+    d = stream.data
+    cuts = []                                    # (start, end, new bytes, chain of enclosing node starts)
+    for at, text in (strings or {}).items():
+        old = struct.unpack_from('<I', d, at)[0]
+        chain = next(c for p, c in stream.strings if p == at)
+        raw = text.encode('latin1') + bytes(1)
+        cuts.append((at, at + 4 + old, struct.pack('<I', len(raw)) + raw, chain))
+    counts = {}
+    for obj in removes:
+        s0, e0 = obj['span']
+        cuts.append((s0, e0, b'', obj['chain'][:-1]))
+        lst = obj['chain'][-2]                   # the OLST holding it
+        counts[lst] = counts.get(lst, 0) + 1
+    out = bytearray(d)
+    for at, raw in (values or {}).items():
+        out[at:at + len(raw)] = raw
+    # node sizes: every node start in a cut's chain grows by the cut's change
+    grow = {}
+    for s0, e0, raw, chain in cuts:
+        for node in chain:
+            grow[node] = grow.get(node, 0) + len(raw) - (e0 - s0)
+    for node, g in grow.items():
+        size = struct.unpack_from('<I', out, node)[0]
+        struct.pack_into('<I', out, node, size + g)
+    for lst, n in counts.items():
+        # the count follows the tag: u32 size, str 'OLST' (4 + 5 bytes), u16 class, count
+        at = lst + 4 + 4 + 5 + 2
+        if stream.count_size == 4:
+            struct.pack_into('<I', out, at, struct.unpack_from('<I', out, at)[0] - n)
+        else:
+            struct.pack_into('<H', out, at, struct.unpack_from('<H', out, at)[0] - n)
+    for s0, e0, raw, _chain in sorted(cuts, key=lambda c: -c[0]):
+        out[s0:e0] = raw
+    return bytes(out)
+

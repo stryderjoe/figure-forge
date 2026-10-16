@@ -89,13 +89,17 @@ def write_files(dat_path, files):
             f.write(data)
             key = by_lower.get(path.lower())
             if key:
-                flags = table[key][3] & 0xFFFF0000
+                # -4 (LEGO Batman 2) keeps something unknown in the flags' second and third bytes: kept as it is
+                flags = table[key][3] & (0xFFFFFF00 if version == -4 else 0xFFFF0000)
                 table[key] = (offset >> 8, len(data), len(data), flags)
                 replaced.append(key)
             else:
                 table[path] = (offset >> 8, len(data), len(data), 0)
                 added.append(path)
-        new_info = datwrite.build_index(version, table, order)
+        if version == -4:
+            new_info = datwrite.build_index_linked(info, paths, table)
+        else:
+            new_info = datwrite.build_index(version, table, order)
         f.seek(0, 2)
         end = f.tell()
         f.write(b'\0' * ((-end) % 2048))

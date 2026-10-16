@@ -22,7 +22,8 @@ from check_ui import EDGE, Page, free_port  # noqa: E402
 def main(argv):
     out, bases = argv[0], argv[1:]
     from PIL import Image, ImageDraw
-    with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'games.json')) as f:
+    # SHEET_GAMES: another games file (a folder holding an exported character, read as its game)
+    with open(os.environ.get('SHEET_GAMES') or os.path.join(os.path.dirname(os.path.abspath(__file__)), 'games.json')) as f:
         settings.save({'games': json.load(f)})
     httpd = server.serve(0)
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
