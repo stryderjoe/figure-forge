@@ -98,7 +98,8 @@ def main(out):
             key = page.js("""(() => { const m = FF.figureMaterials().find(m => [...m.parts].some(p => /torso|body/i.test(p)));
                 if (!m) return null; FF.setColour(m.key, [0.1, 0.4, 0.9]); return m.key; })()""")
             check(bool(key), f'{gid}: recoloured {key}')
-            pkey = page.js("""(() => { let k = null; FF.viewer.figure.traverse(o => {
+            # textures arrive after the figure: wait for them (a busy machine took longer than the step allowed)
+            pkey = page.js("""(async () => { await FF.viewer.whenTexturesReady(); let k = null; FF.viewer.figure.traverse(o => {
                 if (!k && o.isMesh && o.userData.slot === 'torso' && o.material.map) k = o.userData.materialKey; }); return k; })()""")
             ok = page.js("""(async () => {
                 const KEY = %s; if (!KEY) return false;
