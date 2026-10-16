@@ -98,6 +98,7 @@ async function objZip(viewer, name) {
 }
 
 export async function exportFigure(viewer, format, name, save) {
+  await viewer.whenTexturesReady();
   let bytes;
   if (format === 'glb') bytes = await gltf(viewer, true);
   else if (format === 'gltf') bytes = await gltf(viewer, false);

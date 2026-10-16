@@ -168,13 +168,21 @@ export class Viewer {
   texture(url) {
     if (!url) return null;
     if (!this.textures.has(url)) {
-      const t = new THREE.TextureLoader().load(url);
+      let done;
+      const ready = new Promise(r => { done = r; });
+      const t = new THREE.TextureLoader().load(url, () => done(), undefined, () => done());
+      t.userData.ready = ready;
       t.colorSpace = THREE.SRGBColorSpace;
       t.flipY = true;
       t.wrapS = t.wrapT = THREE.RepeatWrapping;       // the games wrap (some UVs run past 0..1)
       this.textures.set(url, t);
     }
     return this.textures.get(url);
+  }
+
+  // every texture in use has finished loading (exporters need the pixels)
+  whenTexturesReady() {
+    return Promise.all([...this.textures.values()].map(t => t.userData.ready).filter(Boolean));
   }
 
   makeMaterial(info) {
@@ -229,7 +237,7 @@ export class Viewer {
         bone.add(obj);
       }
       obj.name = `${part.label} ${m.mesh}`;
-      obj.userData = { part: part.id, slot: part.slot, materialKey: m.material.key, uvs: m.uv, index: m.index };
+      obj.userData = { part: part.id, slot: part.slot, materialKey: m.material.key };   // exported as glTF extras
       obj.frustumCulled = false;
       objs.push(obj);
     }
