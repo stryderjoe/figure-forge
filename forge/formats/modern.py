@@ -483,6 +483,7 @@ class Character:
             k = len(self.attached)
             self.attached.append(am)
             self.tints.append(self._attachment_tint(att, stem))
+            roles = roles or self._own_roles(stem)
             if roles:
                 self.attachment_roles[k] = roles
             base = 100000 * (k + 1)
@@ -582,6 +583,9 @@ class Character:
                   np.asarray(w, dtype=np.float64).reshape(4, 4) for b, w in zip(sub.bones, world)]
         k = len(self.attached)
         self.attached.append(sub.base)
+        roles = self._own_roles(stem)
+        if roles:
+            self.attachment_roles[k] = roles
         t = tuple(att.get('Tint Colour') or (1.0, 1.0, 1.0))
         dt = sub.cd.roots[0][0]['fields'].get('Default Tint Colour') or (1.0, 1.0, 1.0)
         self.tints.append((t[0] * dt[0], t[1] * dt[1], t[2] * dt[2]))
@@ -611,6 +615,7 @@ class Character:
         if not meshes:
             self.attached.pop()
             self.tints.pop()
+            self.attachment_roles.pop(k, None)
             return
         self._mesh_mat.update(mats)
         self.layers.append({'index': len(self.layers), 'name': f'TT_{att.get("Attachment Name") or stem}',
@@ -775,6 +780,26 @@ class Character:
             return out or first
         return first
 
+    def _own_roles(self, stem):
+        """{material number: texture path or ('material', remap file, material)} from an attachment's own
+        definition (LEGO Marvel's wingsarchangel.cd), or {}."""
+        cd = _cd_index(self.chars_dir).get(stem.lower() + '.cd')
+        if not cd:
+            return {}
+        try:
+            stream = ttstream.Stream(open(cd, 'rb').read())
+        except (ttstream.StreamError, struct.error, ValueError, OSError):
+            return {}
+        roles = {}
+        for o in (x for r in stream.roots for x in ttstream.walk(r)):
+            g = o['fields']
+            if o['class'] == 'Character Texture' and isinstance(g.get('Texture File'), str):
+                roles[g.get('Material')] = g['Texture File']
+            elif o['class'] == 'Character Material' and g.get('Source Material Resource File'):
+                roles.setdefault(g.get('Material'), ('material', g['Source Material Resource File'],
+                                                     g.get('Source Material') or ''))
+        return roles
+
     def _attachment_tint(self, att, stem):
         """The attachment's tint times that of a definition of the same name beside its model (LEGO Batman 3's
         skinnedhair_mediumwavy.cd: blonde; its _black and _red copies are other definitions of the same model)."""
@@ -872,8 +897,12 @@ class Character:
         role = role[:-5] if role.endswith('_GAME') else role
         path = self.role_textures.get(ROLE.get(role))
         own_roles = self.attachment_roles.get(mesh_index // 100000 - 1) if mesh_index >= 100000 else None
-        if own_roles and ROLE.get(role) in own_roles:
-            path = own_roles[ROLE[role]]
+        if own_roles:
+            # an attachment's own definition numbers its model's materials from 1 (wingsarchangel.cd: material 1,
+            # the feathers, wears MAT_ARCHANGELMETAL; facetex_*.cd: material 1, FaceTex_MAT, the face print)
+            key = mi + 1 if mi is not None and mi + 1 in own_roles else ROLE.get(role)
+            if key in own_roles:
+                path = own_roles[key]
         if path is None and role == 'CAPE_INSIDE':
             path = self.role_textures.get(ROLE['CAPE'])          # no lining of its own: the cape's texture
         tex = -1
