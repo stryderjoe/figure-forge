@@ -65,7 +65,9 @@ def material_json(game_id, char, mesh_index):
     fmt = char.texture_format(tex) if has else ''
     return {'colour': [round(float(c), 4) for c in m['colour'][:4]],
             'texture': f'/api/texture?char={char.id}&index={tex}' if has else None,
-            'alpha': fmt.startswith(('DXT3', 'DXT5', 'A8R8G8B8')),
+            # glasses wear DXT1 with its 1-bit alpha (LEGO Batman 3's Plastic Man: only the lenses are drawn)
+            'alpha': fmt.startswith(('DXT3', 'DXT5', 'A8R8G8B8', 'DX1A')) or
+                     (fmt == 'DXT1' and 'GLASS' in str(m.get('name', '')).upper()),
             'vertexColours': vc,
             'vertexColourScale': float(m.get('vertex_colour_scale', 2.0)),
             'occluder': bool(m.get('occluder')),
