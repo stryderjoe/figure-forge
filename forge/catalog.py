@@ -105,7 +105,8 @@ class Game:
                     if not os.path.isdir(path) or folder.lower() in ('super_characters', 'super_character'):
                         continue
                     for f in sorted(os.listdir(path), key=str.lower):
-                        if f.lower().endswith('.cd'):
+                        # '_krawly' definitions are the low-detail crowd copies (LEGO Batman 2): left out
+                        if f.lower().endswith('.cd') and not f.lower().endswith('_krawly.cd'):
                             name = f[:-3]
                             out.append({'id': f'{self.id}:{folder}/{name}'.lower(), 'name': name, 'folder': folder,
                                         'model': os.path.join(path, f)})

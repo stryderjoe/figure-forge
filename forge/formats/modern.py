@@ -376,6 +376,9 @@ class Character:
             g = o['fields']
             if o['class'] == 'Character Texture' and isinstance(g.get('Texture File'), str):
                 self.role_textures[g.get('Material')] = g['Texture File']
+            elif o['class'] == 'Character Material Mapping' and g.get('Diffuse Texture File 1'):
+                # LEGO Pirates' older definitions: a role's texture as its first diffuse map
+                self.role_textures[g.get('Material')] = g['Diffuse Texture File 1']
             elif o['class'] == 'Character Material' and g.get('Source Material Resource File'):
                 # LEGO Marvel: the role wears a named material of another model (a material remap)
                 self.role_textures.setdefault(g.get('Material'), ('material', g['Source Material Resource File'],
@@ -383,7 +386,7 @@ class Character:
             elif o['class'] == 'Character Material' and isinstance(g.get('Layer 1 Tint Colour'), tuple):
                 # LEGO Batman 3: plain parts are the material's white map times this colour
                 self.role_tints[g.get('Material')] = g['Layer 1 Tint Colour']
-            elif o['class'] == 'Character Layer Special':
+            elif o['class'] in ('Character Layer Special', 'Character Layer'):     # 'Character Layer': LEGO Pirates
                 self.layer_choice[g.get('Layer Id', g.get('Layer'))] = g.get('Layer Special')
             elif o['class'] == 'Character Attachment':
                 self.attachments.append({k: g.get(k) for k in ('Attachment Name', 'Layer', 'Resource File', 'Locator', 'Tint Colour',

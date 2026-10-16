@@ -378,8 +378,13 @@ export class Viewer {
     const box = new THREE.Box3().setFromObject(this.figure, true);
     if (box.isEmpty()) return;
     const c = box.getCenter(new THREE.Vector3()), size = box.getSize(new THREE.Vector3()).length();
+    if (![c.x, c.y, c.z, size].every(Number.isFinite) || size <= 0) return;
+    // keep the angle the figure was seen from (camera to the old target), not the direction to the new
+    // centre: after a large or far-off figure that direction turned straight down
+    let dir = this.camera.position.clone().sub(this.controls.target);
+    if (!(dir.lengthSq() > 1e-12) || Math.abs(dir.clone().normalize().y) > 0.9) dir = new THREE.Vector3(0.35, 0.25, 1);
+    dir.normalize();
     this.controls.target.copy(c);
-    const dir = this.camera.position.clone().sub(c).normalize();
     this.camera.position.copy(c).addScaledVector(dir, size * 1.9);
     this.camera.near = size / 100; this.camera.far = size * 50; this.camera.updateProjectionMatrix();
   }

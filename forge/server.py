@@ -59,7 +59,7 @@ def build_index(state, gid):
     try:
         with open(path, encoding='utf-8') as f:
             cached = json.load(f)
-        if cached.get('stamp') == stamp and cached.get('version') == 5:
+        if cached.get('stamp') == stamp and cached.get('version') == 6:
             return cached
     except (OSError, ValueError):
         pass
@@ -76,7 +76,7 @@ def build_index(state, gid):
             chars.append({'id': e['id'], 'name': e['name'], 'folder': e['folder'], 'error': str(ex)[:200],
                           'humanoid': False, 'parts': []})
     state.indexing.pop(gid, None)
-    data = {'version': 5, 'stamp': stamp, 'game': gid, 'characters': chars}
+    data = {'version': 6, 'stamp': stamp, 'game': gid, 'characters': chars}
     with open(path, 'w', encoding='utf-8') as f:
         json.dump(data, f)
     return data

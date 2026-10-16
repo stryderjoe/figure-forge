@@ -486,7 +486,8 @@ def definition(char, model_ref):
     root = s.roots[0][0]
     objs = [x for r in s.roots for x in ttstream.walk(r)]
     drop = [o for o in objs if not o.get('inline') and o['class'] in
-            ('Character Texture', 'Character Material', 'Character Attachment', 'Character Layer Special')]
+            ('Character Texture', 'Character Material', 'Character Attachment', 'Character Layer Special',
+             'Character Material Mapping', 'Character Layer')]
     key = 'Override Model File' if 'Override Model File' in root['fields'] else 'Model File'
     values = {}
     for field in ('Default Layers', 'Cutscene Layers'):
