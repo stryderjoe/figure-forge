@@ -455,6 +455,11 @@ class Character:
                 if any(x['name'] == y['name'] for y in first):
                     break
                 first.append(x)
+            # a '_NonBlended' piece is the still copy of a piece drawn with expressions: never both
+            # (LEGO Batman 3's Adam West: a second, open mouth over the face)
+            blended = {x['name'].lower() for x in first}
+            first = [x for x in first if not (x['name'].lower().endswith('_nonblended') and
+                                              x['name'].lower()[:-len('_nonblended')] in blended)]
             chosen = named or ingame or first or specials[:1]
             # a rigid piece of the attachment sits on a joint of its own skeleton: its vertices are in that
             # joint's frame, so the joint's bind position comes first, then the locator
