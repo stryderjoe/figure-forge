@@ -23,7 +23,7 @@ GAMES = OrderedDict((
     ('tcs', 'LEGO Star Wars: The Complete Saga'),
     ('lb2', 'LEGO Batman 2: DC Super Heroes'),
     ('lmsh', 'LEGO Marvel Super Heroes'),
-    ('pirates', 'LEGO Pirates of the Caribbean (experimental: figures incomplete)'),
+    ('pirates', 'LEGO Pirates of the Caribbean'),
 ))
 # games that share file formats form one era (a mode of the program)
 ERAS = OrderedDict((

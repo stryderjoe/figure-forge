@@ -17,7 +17,10 @@ from .classic import FormatError, mat_mul
 
 ROLE = {'HEAD_FRONT': 1, 'HEAD_BACK': 2, 'BODY_FRONT': 3, 'BODY_BACK': 4, 'RIGHTARM': 5, 'LEFTARM': 24,
         'RIGHTHAND': 6, 'LEFTHAND': 26, 'HIPS': 7, 'RIGHTLEG': 8, 'LEFTLEG': 25, 'CAPE': 10, 'CAPE_INSIDE': 13,
-        'HAT_COLOUR': 9}
+        'HAT_COLOUR': 9,
+        # LEGO Pirates names one material per pair of arms, hands and legs (measured against the .cd roles of
+        # jacksparrow_captain and elizabeth_redgown)
+        'ARMS': 5, 'HANDS': 6, 'LEGS': 8, 'SKIRT': 12}
 IDENTITY = [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0]
 SKELETON_MODELS = {'super_minifig': ('minifigs', 'super_characters', 'super_minifig', 'super_minifig_nxg.ghg')}
 
@@ -34,6 +37,11 @@ def _pak_index(chars_dir):
                 low = f.lower()
                 if low.endswith('_an4_nxg.pak'):
                     out.setdefault(low[:-len('_an4_nxg.pak')], os.path.join(dirpath, f))
+        # LEGO Pirates keeps its sets as '<set>.pac' of .an3 entries (used only where no .an4 pack exists)
+        for dirpath, _dirs, files in os.walk(chars_dir):
+            for f in files:
+                if f.lower().endswith('.pac'):
+                    out.setdefault(f.lower()[:-4], os.path.join(dirpath, f))
         _PAKS[chars_dir] = out
     return _PAKS[chars_dir]
 
@@ -150,6 +158,8 @@ def load_clip(ref):
     data = next(x[2] for x in items if x[0] == entry)
     if ttdeflate.is_packed(data):
         data = ttdeflate.decompress(data)
+    if data[4:8] == b'ANI9':                        # LEGO Pirates: one block after its size word
+        return an3.An3(ref, data, 4)
     blocks = an3.An4Set(ref, data).blocks
     if not blocks:
         raise FormatError(f'{entry}: no animation blocks')
@@ -171,18 +181,26 @@ def material_table(d):
     starts = [m.start() + a for m in re.finditer(re.escape(bytes([0, 0, 0, 2])), d[a:b])]
 
     def name(at):
-        if at + 2 > len(d):
+        if at + 4 > len(d):
             return None
         n = struct.unpack_from('>H', d, at)[0]
         text = d[at + 2:at + 2 + n]
         if 3 <= n < 120 and text.endswith(bytes([0])) and re.fullmatch(rb'[A-Za-z_][A-Za-z0-9_:.\- ]+', text[:-1]):
             return text[:-1].decode()
+        # LEGO Pirates: u32 length, the text without a closing zero (774 bytes into the record, measured)
+        n = struct.unpack_from('>I', d, at)[0]
+        text = d[at + 4:at + 4 + n]
+        if 2 <= n < 120 and re.fullmatch(rb'[A-Za-z_][A-Za-z0-9_:.\- ]+', text):
+            return text.decode()
         return None
 
-    hits = collections.Counter({k: sum(1 for c in starts if name(c + k)) for k in range(0x200, 0x700)})
-    if not hits:
-        return []
-    k = hits.most_common(1)[0][0]
+    if struct.unpack_from('>I', d, a + 4)[0] == 56:
+        k = 774                 # LEGO Pirates: fixed (a one-material hat gives too few records to vote)
+    else:
+        hits = collections.Counter({k: sum(1 for c in starts if name(c + k)) for k in range(0x200, 0x700)})
+        if not hits:
+            return []
+        k = hits.most_common(1)[0][0]
     out, last = [], -1
     for c in starts:
         nm = name(c + k)
@@ -203,14 +221,17 @@ def texture_slots(d, table, texture_count):
     colour maps are set."""
     a = d.find(b'LTMU')
     version = struct.unpack_from('>I', d, a + 4)[0] if a >= 0 else 0
-    gaps = [564] if version in (176, 177) else list(range(520, 640, 4))
+    # LEGO Pirates (version 56): records are byte-packed; the numbers start 497 bytes before the name's length
+    # word (measured on super_minifig: hair, body and head maps land on their own images)
+    gaps = [564] if version in (176, 177) else [497] if version == 56 else list(range(520, 640, 4))
+    slots = 16 if version == 56 else 18        # LEGO Pirates has 16 (two other numbers follow)
     best = None
     for gap in gaps:
         rows = []
         for _n, at in table:
             if at - gap < 0:
                 break
-            rows.append(struct.unpack_from('>18i', d, at - gap))
+            rows.append(struct.unpack_from(f'>{slots}i', d, at - gap) + (-1,) * (18 - slots))
         if len(rows) != len(table) or not all(-1 <= x < max(texture_count, 1) for r in rows for x in r):
             continue
         score = sum(1 for r in rows if r[0] >= 0)
@@ -517,7 +538,7 @@ class Character:
             return None
         try:
             pos, nrm, uv, col, tris, skin = mesh.geometry(i)
-        except (ValueError, struct.error, IndexError):
+        except (ValueError, TypeError, struct.error, IndexError):   # a part whose buffers did not resolve
             return None
         return pos, nrm or [], [tuple(u[:2]) for u in uv] if uv else [], col, [tuple(t) for t in tris], skin
 
@@ -559,6 +580,11 @@ class Character:
             # times the attachment's tint (a hair colour)
             geo = self.geometry(mesh_index)
             vc = bool(geo and geo[3])
+        elif self._source(mesh_index)[0].version in (46, 47):
+            # LEGO Pirates shades textured pieces with their vertex colours too (127 = unchanged; Blackbeard's
+            # beard is a grey texture made black this way)
+            geo = self.geometry(mesh_index)
+            vc = bool(geo and geo[3] and any(c[:3] != (127, 127, 127) for c in geo[3]))
         if mesh_index >= 100000:
             # an attachment's tint (hair colour, a cape's colour) multiplies its texture or vertex colours
             t = self.tints[mesh_index // 100000 - 1]
@@ -598,10 +624,10 @@ class Character:
                 continue
             for item in items:
                 entry = item[0]
-                if not entry.lower().endswith('.an4'):
+                if not entry.lower().endswith(('.an4', '.an3')):
                     continue
                 name = entry[:-4]
-                for tail in ('_def_nxg', '_nxg'):
+                for tail in ('_def_nxg', '_nxg', '_def_ps3', '_ps3'):
                     if name.lower().endswith(tail):
                         name = name[:-len(tail)]
                         break

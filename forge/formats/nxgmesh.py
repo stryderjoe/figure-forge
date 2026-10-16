@@ -44,6 +44,13 @@ class C:
         return at
 
 
+def _streams(word):
+    """The stream count of a part record: the low byte (LEGO Pirates: 0x0601 = 1), or its low two bits when the
+    byte is larger (LEGO Pirates' faces: 0x25 = 1)."""
+    low = word & 0xFF
+    return low if low <= 4 else low & 3
+
+
 class MeshSection:
     """Parts of the MESH section: each {'streams': [(buffer key, byte offset)], 'index': buffer key,
     'first_index', 'index_count', 'first_vertex', 'vertex_count', 'palette': [bone numbers]}."""
@@ -69,8 +76,8 @@ class MeshSection:
         count = c.u32()
         self.buffers, self.parts, self.serial, refs = {}, [], 0, []
         for _ in range(count):
-            part = {'streams': []}
-            for _s in range(c.u32() & 0xFF):          # the low byte is the count (LEGO Pirates: 0x0601 = 1)
+            part = {'streams': [], 'at': c.p}
+            for _s in range(_streams(c.u32())):
                 key = self._buffer(c, 'vertex', refs)
                 part['streams'].append((key, c.u32()))
             short = c.u32()
@@ -138,13 +145,36 @@ class MeshSection:
         # buffer references count every buffer-like record read; find the base that makes them all fit
         if refs:
             bases = None
-            for absolute, kind, _slot in refs:
+            for absolute, kind, _slot, _now in refs:
                 cands = {absolute - k for k, b in self.buffers.items() if b['kind'] == kind and absolute >= k}
                 bases = cands if bases is None else bases & cands
-            if not bases or len(bases) != 1:
+            if bases and len(bases) == 1:
+                base = bases.pop()
+                for absolute, kind, slot, _now in refs:
+                    slot[0] = absolute - base
+            else:
+                self._resolve_by_kind(refs)
+        # LEGO Pirates: the display list numbers the full records first, then the short depth copies (measured
+        # on super_minifig: only so do the first skeleton's layers land on symmetric pairs of legs, arms and
+        # mirrored hands, skinned bodies and rigid hips)
+        self.parts = [p for p in self.parts if not p.get('short')] + [p for p in self.parts if p.get('short')]
+
+    def _resolve_by_kind(self, refs):
+        """LEGO Pirates' faces: some records are counted in a way not yet understood, so one base does not fit
+        every reference. Each kind (vertex, index) then gets its own base: the one under which every reference
+        names an earlier buffer of its kind, choosing the most recent such buffers."""
+        for kind in ('vertex', 'index'):
+            mine = [r for r in refs if r[1] == kind]
+            if not mine:
+                continue
+            bases = None
+            for absolute, _kind, _slot, now in mine:
+                cands = {absolute - k for k, b in self.buffers.items() if b['kind'] == kind and absolute >= k and k < now}
+                bases = cands if bases is None else bases & cands
+            if not bases:
                 raise MeshError('buffer references do not resolve')
-            base = bases.pop()
-            for absolute, kind, slot in refs:
+            base = min(bases)
+            for absolute, _kind, slot, _now in mine:
                 slot[0] = absolute - base
 
     def _part_start(self, q):
@@ -154,7 +184,7 @@ class MeshSection:
         if q + 32 > len(d):
             return False
         ns, tok = struct.unpack_from('>II', d, q)
-        if not (1 <= ns & 0xFF <= 4 and ns < 0x10000):
+        if not (1 <= _streams(ns) <= 4 and ns < 0x10000):
             return False
         if tok & 0xFFFF0000 == 0xC0000000:
             return struct.unpack_from('>I', d, q + 8)[0] == 1
@@ -172,7 +202,7 @@ class MeshSection:
             if c.u32() != 1:
                 raise MeshError(f'buffer reference at {c.p - 8:#x}')
             slot = [None]
-            refs.append((token & 0xFFFF, kind, slot))
+            refs.append((token & 0xFFFF, kind, slot, self.serial))
             return slot
         if token != 1:
             raise MeshError(f'buffer token {token:#x} at {c.p - 4:#x}')

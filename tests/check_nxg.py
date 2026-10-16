@@ -15,6 +15,8 @@ for root in sys.argv[1:]:
         try:
             m = nxgmesh.MeshSection(open(p, 'rb').read())
             for i in range(len(m.parts)):
+                if m.parts[i].get('short'):          # LEGO Pirates' depth copies are never drawn
+                    continue
                 pos, nrm, uv, col, t, skin = m.geometry(i)
                 parts += 1
                 tris += len(t)

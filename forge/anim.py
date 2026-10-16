@@ -159,7 +159,7 @@ def rest_pose(char):
     if not hasattr(char, 'clip_list'):
         return None
     clips = clip_list(char)
-    pick = (next((c for c in clips if c['name'].lower() == 'idle'), None)
+    pick = (next((c for c in clips if c['name'].lower() in ('idle', 'idle1')), None)     # LEGO Pirates: IDLE1
             or next((c for c in clips if c['name'].lower().startswith('idle')), None)
             or next((c for c in clips if c['name'].lower().endswith('_idle')), None))      # Thor: Hammer_Idle
     if pick is None:

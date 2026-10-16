@@ -66,8 +66,9 @@ def read(d, part_count):
         q += 4 if marked else 1
 
 
-def _record(d, p, end, names, clips, commands, part_count, i):
-    """One named model instance at p, or None when p does not hold one."""
+def _record(d, p, end, names, clips, commands, part_count, i, strict=False):
+    """One named model instance at p, or None when p does not hold one. Strict (a list found without markers,
+    LEGO Pirates): the name must start at a string boundary and be printable, the matrix finite."""
     if p + 208 > end:
         return None
     off = struct.unpack_from('>I', d, p)[0]
@@ -76,18 +77,18 @@ def _record(d, p, end, names, clips, commands, part_count, i):
         return None
     if names is not None:
         # a name starts at a string boundary of the name table
-        if off > 0x100000 or (off and d[names + off - 1] != 0):
+        if strict and (off > 0x100000 or (off and d[names + off - 1] != 0)):
             return None
         e = d.find(bytes([0]), names + off, names + off + 256)
         if e < 0:
             return None
         name = d[names + off:e].decode('latin1')
-        if not name or not all(32 < ord(ch) < 127 for ch in name):
+        if strict and (not name or not all(32 < ord(ch) < 127 for ch in name)):
             return None
     else:
         name = f'special{i}'
     matrix = struct.unpack_from('>16f', d, p + 4)
-    if not all(abs(v) < 1e4 for v in matrix):          # NaN fails too
+    if strict and not all(abs(v) < 1e4 for v in matrix):          # NaN fails too
         return None
     parts = []
     if clip != 0xFFFFFFFF:
@@ -105,14 +106,23 @@ def _specials(d, q, end, names, clips, commands, part_count, need_name=False):
     count = struct.unpack_from('>I', d, q + 4)[0]
     if not 0 < count < 4096:
         return None
+    single = False
     if need_name and (count < 2 or struct.unpack_from('>I', d, q + 8)[0] == 0):
-        return None
+        # a one-piece scene (LEGO Pirates' hats): its only instance is the table's first name; accepted only
+        # as a whole transform that draws something
+        if count != 1:
+            return None
+        single = True
     p = q + 8
     out = []
     for i in range(count):
-        rec = _record(d, p, end, names, clips, commands, part_count, i)
+        rec = _record(d, p, end, names, clips, commands, part_count, i, strict=need_name)
         if rec is None:
             return None
         out.append(rec)
         p += rec['size']
+    if single and (out[0]['matrix'][15] != 1.0 or not out[0]['parts']):
+        return None
+    if need_name and any(r['name'] == 'default_string' for r in out):
+        return None             # the name table's first entry: not a real instance (Davy Jones' false match)
     return out
