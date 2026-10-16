@@ -128,6 +128,16 @@ class Character:
         mi = self.nu.meshes[mesh_index]['material']
         return self.nu.materials[mi] if 0 <= mi < len(self.nu.materials) else None
 
+    def has_texture(self, index):
+        return 0 <= index < len(self.nu.textures) and bool(self.nu.textures[index].get('size'))
+
+    def texture_format(self, index):
+        return self.nu.textures[index].get('format', '') if self.has_texture(index) else ''
+
+    def texture_bytes(self, index):
+        t = self.nu.textures[index]
+        return self.nu.d[t['data_offset']:t['data_offset'] + t['size']]
+
 
 def geometry(nu, mesh_index):
     """(positions, normals, uvs, colours, triangles, weights) of one mesh, or None.

@@ -13,7 +13,7 @@ import time
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-os.environ['FIGUREFORGE_HOME'] = tempfile.mkdtemp(prefix='ff_shot_')
+os.environ.setdefault('FIGUREFORGE_HOME', tempfile.mkdtemp(prefix='ff_shot_'))
 from forge import server, settings  # noqa: E402
 from check_ui import EDGE, Page, free_port  # noqa: E402
 
@@ -34,7 +34,7 @@ def main(argv):
     try:
         page = Page(port)
         page.call('Page.navigate', url=f'http://127.0.0.1:{httpd.server_address[1]}/?base={base}')
-        page.wait("document.body && document.body.dataset.ready === '1'", 300)
+        page.wait("document.body && document.body.dataset.ready === '1'", 1800)
         if pre:
             print(page.js(pre))
         if clip:

@@ -21,7 +21,19 @@ GAMES = OrderedDict((
     ('lb1', 'LEGO Batman: The Videogame'),
     ('indy', 'LEGO Indiana Jones: The Original Adventures'),
     ('tcs', 'LEGO Star Wars: The Complete Saga'),
+    ('lb2', 'LEGO Batman 2: DC Super Heroes'),
+    ('lmsh', 'LEGO Marvel Super Heroes'),
 ))
+# games that share file formats form one era (a mode of the program)
+ERAS = OrderedDict((
+    ('classic', {'title': 'Classic (2007 to 2008)', 'games': ['lb1', 'indy', 'tcs']}),
+    ('nxg', {'title': 'Super-hero era (2012 to 2013)', 'games': ['lb2', 'lmsh']}),
+))
+MODERN = {'lb2', 'lmsh'}
+
+
+def era_of(game_id):
+    return next((e for e, v in ERAS.items() if game_id in v['games']), 'classic')
 SLOTS = ['head', 'face', 'hair', 'headgear', 'neck', 'torso', 'arms', 'hands', 'hips', 'legs', 'cape',
          'back', 'held', 'accessory']
 SKIP_LAYER = re.compile(r'breakup|blowup|_dead|dead_|^tt\d+_dead|(^|_)(low|lo|med|medium|vlo|verylo)(_?res)?(_|$)|'
@@ -49,6 +61,11 @@ def guess_game(root):
         return 'indy'
     if 'lukeskywalker' in names or 'darthvader' in names or 'chewbacca' in names:
         return 'tcs'
+    figs = classic.listing(os.path.join(chars, names['minifigs'])) if 'minifigs' in names else {}
+    if 'ironman' in figs or 'spiderman' in figs or 'hulk' in figs:
+        return 'lmsh'
+    if 'batman' in figs:
+        return 'lb2'
     return None
 
 
@@ -65,6 +82,23 @@ class Game:
 
     def characters(self):
         """[{id, name, folder, model}] for every full-detail model, sorted by name."""
+        if self._list is None and self.id in MODERN:
+            # newer era: a character is a definition (.cd) in chars/minifigs/<name>/ (or another kind's folder)
+            out = []
+            for kind in sorted(os.listdir(self.chars_dir), key=str.lower):
+                kdir = os.path.join(self.chars_dir, kind)
+                if not os.path.isdir(kdir) or kind.lower() not in ('minifigs', 'bigfigs', 'creatures'):
+                    continue
+                for folder in sorted(os.listdir(kdir), key=str.lower):
+                    path = os.path.join(kdir, folder)
+                    if not os.path.isdir(path) or folder.lower() == 'super_characters':
+                        continue
+                    for f in sorted(os.listdir(path), key=str.lower):
+                        if f.lower().endswith('.cd'):
+                            name = f[:-3]
+                            out.append({'id': f'{self.id}:{folder}/{name}'.lower(), 'name': name, 'folder': folder,
+                                        'model': os.path.join(path, f)})
+            self._list = out
         if self._list is None:
             out = []
             for folder in sorted(os.listdir(self.chars_dir), key=str.lower):
@@ -92,7 +126,11 @@ class Game:
             self._cache.move_to_end(char_id)
             return self._cache[char_id]
         entry = self.entry(char_id)
-        char = classic.Character(entry['model'])
+        if self.id in MODERN:
+            from .formats import modern
+            char = modern.Character(entry['model'], self.chars_dir)
+        else:
+            char = classic.Character(entry['model'])
         char.id = char_id
         char.common = skeleton.common_names(char.bones)
         self._cache[char_id] = char
@@ -147,6 +185,20 @@ def skinned_slot(layer_name):
     return None
 
 
+MODERN_SLOTS = (('armour', 'torso'), ('hand', 'hands'), ('arm', 'arms'), ('head', 'head'), ('neck', 'neck'), ('hips', 'hips'),
+                ('leg', 'legs'), ('cape', 'cape'), ('hair', 'hair'), ('hat', 'headgear'), ('glasses', 'headgear'),
+                ('face', 'face'), ('backpack', 'back'), ('body', 'torso'), ('suit', 'torso'), ('armour', 'torso'))
+
+
+def modern_slot(layer_name):
+    """Newer era: every body layer is one part already (TT0_LeftHand, TT2_Body ...)."""
+    name = re.sub(r'^tt\d+_', '', layer_name, flags=re.I).lower()
+    for key, slot in MODERN_SLOTS:
+        if key in name:
+            return slot
+    return 'accessory'
+
+
 def layer_label(name):
     """'TT12_Body_Blue_NG' -> 'Body Blue'."""
     s = re.sub(r'^tt\d+_', '', name, flags=re.I)
@@ -175,7 +227,12 @@ def parts(char):
     """Parts of one character: [{id, slot, label, layer, kind, bone, region, default, meshes}]."""
     if hasattr(char, '_parts'):
         return char._parts
-    shown = classic.chosen_layers(classic.character_txt(char.path))
+    if hasattr(char, 'layer_choice'):
+        # newer era: the body layers 0 to 10 and the ones the definition picks; break-ups and suits are left out
+        shown = {L['index'] for L in char.layers
+                 if (L['chosen'] or L['index'] <= 10) and not SKIP_LAYER.search(L['name'])}
+    else:
+        shown = classic.chosen_layers(classic.character_txt(char.path))
     out = []
     for layer in char.layers:
         if SKIP_LAYER.search(layer['name']) and (shown is None or layer['index'] not in shown):
@@ -190,7 +247,7 @@ def parts(char):
                             'layer': layer['index'], 'kind': 'rigid', 'bone': common, 'part': p_i,
                             'default': default})
                 continue
-            whole = skinned_slot(layer['name'])
+            whole = skinned_slot(layer['name']) or (modern_slot(layer['name']) if hasattr(char, 'layer_choice') else None)
             if whole:
                 out.append({'id': f'{char.id}|{layer["index"]}|s{p_i}', 'slot': whole, 'label': label,
                             'layer': layer['index'], 'kind': 'skinned', 'region': None, 'part': p_i,

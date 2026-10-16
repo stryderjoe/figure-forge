@@ -88,8 +88,7 @@ def texture_png(state, char_id, index):
         return state.textures[key]
     from PIL import Image
     char = state.game_of(char_id).character(char_id)
-    t = char.nu.textures[index]
-    data = char.nu.d[t['data_offset']:t['data_offset'] + t['size']]
+    data = char.texture_bytes(index)
     im = Image.open(io.BytesIO(data))
     im.load()
     if im.mode not in ('RGBA', 'RGB'):

@@ -56,10 +56,10 @@ def material_json(game_id, char, mesh_index):
     if m is None:
         return {'colour': [0.8, 0.8, 0.8, 1.0], 'texture': None, 'alpha': False}
     tex = m['texture']
-    has = 0 <= tex < len(char.nu.textures) and char.nu.textures[tex].get('size')
+    has = char.has_texture(tex)
     # see-through where the texture has alpha (DXT3 / DXT5 / 32-bit); the material word at +0x40 is not a
     # plain on/off flag in every game (Star Wars stores floats there), so it is not used
-    fmt = char.nu.textures[tex].get('format', '') if has else ''
+    fmt = char.texture_format(tex) if has else ''
     return {'colour': [round(float(c), 4) for c in m['colour'][:4]],
             'texture': f'/api/texture?char={char.id}&index={tex}' if has else None,
             'alpha': fmt.startswith(('DXT3', 'DXT5', 'A8R8G8B8')),
