@@ -1,4 +1,5 @@
-"""Write a figure into a newer-era game (LEGO Batman 2): a model of its own and the body's definition pointed at it.
+"""Write a figure into a newer-era game (LEGO Batman 2, LEGO Marvel Super Heroes): a model of its own and the
+body's definition pointed at it.
 
 Every minifigure of these games shares one model (super_minifig_nxg.ghg); a character is a definition (.cd) that
 picks that model's layers and names the textures each material wears. So a figure becomes:
@@ -8,8 +9,12 @@ picks that model's layers and names the textures each material wears. So a figur
   uses instead of its own pieces;
 - a copy of the body's definition with that model as 'Override Model File', the Body layer as the only one shown,
   and no texture, material, attachment or layer choices of its own (so nothing is drawn over the figure).
-The model reads front to back (no offsets to later sections, measured), so sections may grow; the word at the
-start of the file is the length of everything before the images and follows.
+The model reads front to back (no offsets to later sections, measured), so sections may grow; the word before
+'02UN' (8 bytes before the tag) is the length of the model's main block and follows.
+LEGO Marvel keeps a model's images in a companion '<model>.nxg_textures' (a resource header, then a 'TSXT' block
+listing the textures as the model's own list does, then their DDS images back to back) and its shaders in
+'<model>.pc_shaders'; the model starts with a resource header naming those companions after the model. The new
+model's name has the shared model's length, so those names are rewritten in place.
 """
 import os
 import struct
@@ -50,14 +55,17 @@ class Splices:
 
 class NxgWriter:
     def __init__(self, char):
-        """char: modern.Character of the body (LEGO Batman 2)."""
+        """char: modern.Character of the body (LEGO Batman 2 or LEGO Marvel Super Heroes)."""
         self.char = char
         self.path = char.model_path
         with open(self.path, 'rb') as f:
             self.d = f.read()
         self.mesh = nxgmesh.MeshSection(self.d)
-        if self.mesh.version not in (47, 48):
-            raise WriteError('only LEGO Batman 2 figures can be put into their game yet')
+        if self.mesh.version not in (47, 48, 161, 169) or self.mesh.tail != 72:
+            raise WriteError('figures can be put into LEGO Batman 2 and LEGO Marvel Super Heroes only')
+        self.stem = os.path.basename(self.path)[:-len('_nxg.ghg')]
+        comp = self.path[:-len('.ghg')] + '.nxg_textures'
+        self.companion = open(comp, 'rb').read() if os.path.exists(comp) else None
         self.disp = nxgdisp.read(self.d, len(self.mesh.parts))
         self.model = modern.model(self.path)
         self.bone_index = {b['name'].lower(): i for i, b in enumerate(char.bones)}
@@ -82,7 +90,11 @@ class NxgWriter:
             pos = rec['positions'] * mirror
             nrm = rec['normals'] * mirror if rec['normals'] is not None else np.tile([0, 1.0, 0], (len(pos), 1))
             uv = rec['uv'] if rec['uv'] is not None else np.zeros((len(pos), 2))
-            col = _srgb(rec['colours'][:, :3]) if rec.get('colours') is not None else None
+            col = None
+            if rec.get('colours') is not None:
+                # the material's colour tints vertex colours too (hair colours)
+                tint = np.asarray(glb.material(rec['material'])[0][:3], dtype=np.float64)
+                col = _srgb(rec['colours'][:, :3] * tint)
             tris = rec['indices'][:, [0, 2, 1]]                               # the mirror reverses the winding
             if 'joints' in rec:
                 bones = [game_bone(n) for n in rec['joints']]
@@ -121,13 +133,31 @@ class NxgWriter:
 
     # -- the model --------------------------------------------------------------------------------------------
 
-    def _template_buffer(self):
-        """The vertex format of the model's skinned, textured body parts: position, normal, colour, uv, skin."""
-        want = {0, 1, 2, 5, 9, 10}
-        for key, b in sorted(self.mesh.buffers.items()):
-            if b['kind'] == 'vertex' and {a for a, _t, _o in b['desc']} == want:
-                return b
-        raise WriteError('the model has no skinned, textured vertex format to copy')
+    def _template_buffer(self, body_clip):
+        """The vertex format of the Body layer's own first part (position, normal, colour, uv, skin, and in LEGO
+        Marvel a tangent), so the Body material's shader gets what it expects."""
+        cmd = self.disp['commands'][self.disp['clips'][body_clip][0][1]]
+        part = self.mesh.parts[cmd[2]]
+        b = self.mesh.buffers[part['streams'][0][0][0]]
+        if not {0, 1, 5, 9, 10} <= {a for a, _t, _o in b['desc']}:
+            raise WriteError('the Body part has no skinned, textured vertex format to copy')
+        return b
+
+    def _buffer_head(self, buf, count):
+        """A new vertex buffer's header in the template's form: token, flags, count, (Marvel: 'DXTV' and its
+        version), descriptors, (Marvel: 6 more bytes, copied)."""
+        d, at = self.d, buf['at']
+        head = struct.pack('>III', 1, buf['flags'], count)
+        p = at + 12
+        if not self.mesh.old:
+            head += d[p:p + 8]
+            p += 8
+        n = struct.unpack_from('>I', d, p)[0]
+        head += d[p:p + 4 + 3 * n]
+        p += 4 + 3 * n
+        if not self.mesh.old:
+            head += d[p:p + 6]
+        return head
 
     def _encode(self, desc, stride, pos, nrm, uv, col, skin_idx, skin_w):
         n = len(pos)
@@ -137,6 +167,13 @@ class NxgWriter:
                 v = np.c_[pos, np.ones(n)]
             elif a == 1:
                 v = np.c_[np.clip(np.round(nrm * 127.5 + 127.5), 0, 255), np.full(n, 254)]
+            elif a == 3:
+                # a tangent across the normal (any will do for flat prints: no normal map is drawn on them)
+                tan = np.cross(nrm, [0.0, 1.0, 0.0])
+                small = np.linalg.norm(tan, axis=1) < 1e-3
+                tan[small] = [1.0, 0.0, 0.0]
+                tan /= np.linalg.norm(tan, axis=1, keepdims=True)
+                v = np.c_[np.clip(np.round(tan * 127.5 + 127.5), 0, 255), np.full(n, 254)]
             elif a == 2:
                 v = col
             elif a == 5:
@@ -147,6 +184,8 @@ class NxgWriter:
                 v = skin_w
             else:
                 continue
+            if v.shape[1] < 4:
+                v = np.c_[v, np.zeros((n, 4 - v.shape[1]))]
             if t == 6:
                 raw = np.asarray(v[:, :4], '>f2').view(np.uint8).reshape(n, 8)
             elif t == 5:
@@ -159,11 +198,10 @@ class NxgWriter:
         return out.tobytes()
 
     def _part_record(self, buf, tail, verts, tris, palette):
-        """One part record (LEGO Batman 2's MESH 48): a new vertex buffer, a new index buffer, the counts,
+        """One part record (MESH 48 / 169): a new vertex buffer, a new index buffer, the counts,
         the bone palette (27 bytes), no morph targets, the tail of a body part."""
         rec = struct.pack('>I', 1)
-        rec += struct.pack('>IIII', 1, buf['flags'], len(verts) // buf['stride'], len(buf['desc']))
-        rec += b''.join(bytes(x) for x in buf['desc']) + verts
+        rec += self._buffer_head(buf, len(verts) // buf['stride']) + verts
         rec += struct.pack('>II', 0, 0)
         idx = np.asarray(tris, '>u2').reshape(-1)
         rec += struct.pack('>IIII', 1, 0, len(idx), 2) + idx.tobytes()
@@ -173,8 +211,9 @@ class NxgWriter:
         rec += struct.pack('>I', 0)                                             # no morph targets
         return rec + tail
 
-    def write(self, glb_bytes, texture_name='figureforge_atlas', report=print):
-        """The new model's bytes."""
+    def write(self, glb_bytes, texture_name='figureforge_atlas', report=print, new_stem=None):
+        """{'ghg': the new model, 'nxg_textures': its images (LEGO Marvel) or None}. new_stem: the new model's
+        name, as long as the shared model's (LEGO Marvel: the resource header names the companions by it)."""
         glb = Glb(glb_bytes)
         pieces = self.pieces(glb)
         if not pieces:
@@ -193,8 +232,8 @@ class NxgWriter:
             p['uv'] = np.c_[(x + 0.5 + u * (w - 1)) / side, (y + 0.5 + v * (h - 1)) / side]
 
         # 2. part records after the last one
-        buf = self._template_buffer()
         body_clip = self._body_clip()
+        buf = self._template_buffer(body_clip)
         clip_items = self.disp['clips'][body_clip]
         material = clip_items[0][0]
         tail_part = next(p for p in self.mesh.parts if p['palette'])
@@ -217,9 +256,11 @@ class NxgWriter:
                 nrm = p['nrm'][used]
                 uv = p['uv'][used]
                 if p['col'] is not None:
-                    col = np.c_[np.round(p['col'][used] * 127.5), np.full(len(used), 127)]
+                    # LEGO Batman 2 stores vertex colours at half strength (127 = full), LEGO Marvel at full
+                    full = 127.5 if self.mesh.old else 255.0
+                    col = np.c_[np.round(p['col'][used] * full), np.full(len(used), 127 if self.mesh.old else 255)]
                 else:
-                    col = np.full((len(used), 4), 127)
+                    col = np.full((len(used), 4), 127 if self.mesh.old else 255)
                 si = np.zeros((len(used), 4))
                 sw = np.zeros((len(used), 4))
                 for k, vi in enumerate(used):
@@ -236,8 +277,11 @@ class NxgWriter:
         count_at = self._part_count_at()
         sp.put(count_at, struct.pack('>I', first + len(new_parts)))
 
-        # 3. the texture: an entry in the texture list, its image after the others
-        tex_index = self._add_texture(sp, atlas, texture_name)
+        # 3. the texture: an entry in the texture list, its image after the others (in the model, or in its
+        # companion)
+        entry = os.urandom(16)
+        tex_index = self._add_texture(sp, atlas, texture_name, entry)
+        companion = self._companion(atlas, texture_name, entry, new_stem) if self.companion else None
 
         # 4. the Body material wears it
         table = self.model._table if getattr(self.model, '_table', None) is not None else None
@@ -270,10 +314,56 @@ class NxgWriter:
             rec_at = self.disp['specials'][sp_index]['at']
             sp.put(rec_at + 180, struct.pack('>I', body_clip))
 
-        # 6. the length word at the start
-        nu = struct.unpack_from('>I', d, 0)[0]
-        sp.put(0, struct.pack('>I', nu + sp.growth_before(4 + nu)))
+        # 6. the main block's length word; the new name in the resource header and the display list's path
+        q = d.find(b'02UN')
+        nu = struct.unpack_from('>I', d, q - 8)[0]
+        sp.put(q - 8, struct.pack('>I', nu + sp.growth_before(q - 4 + nu)))
+        if new_stem:
+            self._rename(sp, d, new_stem, [(0, q - 8), self._disp_path()])
         report(f'{len(new_parts)} parts, a {side} x {side} texture')
+        return {'ghg': sp.apply(), 'nxg_textures': companion}
+
+    def _disp_path(self):
+        at = self.d.find(b'PSID')
+        n = struct.unpack_from('>I', self.d, at + 8)[0]
+        return (at + 12, at + 12 + n)
+
+    def _rename(self, sp, d, new_stem, regions):
+        """The shared model's name -> new_stem (same length), in any case, inside the given byte ranges."""
+        import re
+        old = self.stem
+        if len(new_stem) != len(old):
+            raise WriteError(f'the new model name must have {len(old)} letters')
+        for s0, s1 in regions:
+            for m in re.finditer(re.escape(old.encode('latin1')), d[s0:s1], re.IGNORECASE):
+                found = m.group(0).decode('latin1')
+                new = new_stem.upper() if found.isupper() else new_stem.lower() if found.islower() else new_stem.title()
+                sp.put(s0 + m.start(), new.encode('latin1'))
+
+    def _companion(self, atlas, name, entry, new_stem):
+        """LEGO Marvel's '.nxg_textures' with the atlas added: one more entry in 'TSXT' (its block length
+        follows) and its DDS after the others."""
+        t = self.companion
+        sp = Splices(t)
+        x = t.find(b'.CC4TSXT')
+        a = t.find(b'ROTV', t.find(b'CONVDATE'))
+        if x < 0 or a < 0:
+            raise WriteError('the texture file is not as expected')
+        n = struct.unpack_from('>I', t, a + 4)[0]
+        p = a + 8
+        for _ in range(n):
+            ln = struct.unpack_from('>I', t, p + 16)[0]
+            p += 20 + ln + 4
+        path = f'figureforge/{name}.nut'.encode('latin1') + b'\0'
+        rec = entry + struct.pack('>I', len(path)) + path + struct.pack('>I', 0)
+        sp.put(a + 4, struct.pack('>I', n + 1))
+        sp.put(p, rec, 0)
+        size = struct.unpack_from('>I', t, x - 4)[0]
+        sp.put(x - 4, struct.pack('>I', size + len(rec)))
+        dds, _levels = dds_dxt5_mipped(atlas)
+        sp.put(len(t), dds, 0)
+        if new_stem:
+            self._rename(sp, t, new_stem, [(0, struct.unpack_from('>I', t, 0)[0] + 4)])
         return sp.apply()
 
     def _record_end(self, part):
@@ -304,28 +394,32 @@ class NxgWriter:
             return s['clip']
         raise WriteError('the model has no Body layer to draw the figure with')
 
-    def _add_texture(self, sp, atlas, name):
-        """Adds the atlas to the texture list ('HGXT': a count and a word per texture, then a count and per
-        texture a 16-byte hash, the source path, a flag) and its DDS image after the model's own."""
+    def _add_texture(self, sp, atlas, name, entry):
+        """Adds the atlas to the texture list ('HGXT': a count and a word per texture (LEGO Marvel: none), then a
+        count and per texture a 16-byte hash, the source path, a flag) and, when the model holds its images
+        (LEGO Batman 2), its DDS image after the model's own."""
         d = self.d
         at = d.find(b'HGXT')
         if at < 0 or d[at + 8:at + 12] != b'ROTV':
             raise WriteError('the model has no texture list')
-        n = struct.unpack_from('>I', d, at + 12)[0]
-        words_end = at + 16 + 4 * n
-        if d[words_end:words_end + 4] != b'ROTV' or struct.unpack_from('>I', d, words_end + 4)[0] != n:
+        m = struct.unpack_from('>I', d, at + 12)[0]
+        words_end = at + 16 + 4 * m
+        n = struct.unpack_from('>I', d, words_end + 4)[0] if d[words_end:words_end + 4] == b'ROTV' else -1
+        if m not in (0, n):
             raise WriteError('the texture list is not as expected')
         p = words_end + 8
         for _ in range(n):
             ln = struct.unpack_from('>I', d, p + 16)[0]
             p += 20 + ln + 4
-        sp.put(at + 12, struct.pack('>I', n + 1))
-        sp.put(words_end, struct.pack('>I', 0), 0)
+        if m:
+            sp.put(at + 12, struct.pack('>I', n + 1))
+            sp.put(words_end, struct.pack('>I', 0), 0)
         sp.put(words_end + 4, struct.pack('>I', n + 1))
         path = f'figureforge/{name}.nut'.encode('latin1') + b'\0'
-        sp.put(p, os.urandom(16) + struct.pack('>I', len(path)) + path + struct.pack('>I', 0), 0)
-        dds, _levels = dds_dxt5_mipped(atlas)
-        sp.put(len(d), dds, 0)
+        sp.put(p, entry + struct.pack('>I', len(path)) + path + struct.pack('>I', 0), 0)
+        if self.companion is None:
+            dds, _levels = dds_dxt5_mipped(atlas)
+            sp.put(len(d), dds, 0)
         return n
 
 

@@ -207,7 +207,7 @@ class MeshSection:
         if token != 1:
             raise MeshError(f'buffer token {token:#x} at {c.p - 4:#x}')
         flags, count = c.u32(), c.u32()
-        b = {'kind': kind, 'count': count, 'flags': flags}
+        b = {'kind': kind, 'count': count, 'flags': flags, 'at': c.p - 12}
         if kind == 'vertex':
             if not self.old:
                 if self.d[c.p:c.p + 4] != b'DXTV':

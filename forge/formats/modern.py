@@ -89,8 +89,14 @@ class Model:
             while at >= 0:
                 starts.append(at)
                 at = data.find(b'DDS |', at + 4)
-            self._bundle = (src, [(x, starts[i + 1] if i + 1 < len(starts) else len(data))
-                                  for i, x in enumerate(starts)])
+            spans = [(x, starts[i + 1] if i + 1 < len(starts) else len(data)) for i, x in enumerate(starts)]
+            # the texture list names each texture; an entry without a name has no image (LEGO Marvel ends its
+            # list with two such), so texture numbers are list places, not image places
+            named = texture_list(self.d)
+            if named is not None and sum(named) == len(spans):
+                it = iter(spans)
+                spans = [next(it) if has else None for has in named]
+            self._bundle = (src, spans)
         return self._bundle
 
     def colour_texture(self, material_index):
@@ -101,7 +107,7 @@ class Model:
         if not 0 <= material_index < len(names) or self._slots[material_index] is None:
             return None
         t = self._slots[material_index][0]
-        if t < 0 or t >= len(self.bundle[1]):
+        if t < 0 or t >= len(self.bundle[1]) or self.bundle[1][t] is None:
             return None
         return (self.bundle[0],) + self.bundle[1][t]
 
@@ -164,6 +170,28 @@ def load_clip(ref):
     if not blocks:
         raise FormatError(f'{entry}: no animation blocks')
     return max(blocks, key=lambda b: b.nodes)
+
+
+def texture_list(d):
+    """Per entry of a model's texture list ('HGXT'), whether it names a texture (has an image), or None."""
+    at = d.find(b'HGXT')
+    if at < 0 or d[at + 8:at + 12] != b'ROTV':
+        return None
+    try:
+        m = struct.unpack_from('>I', d, at + 12)[0]
+        p = at + 16 + 4 * m
+        if d[p:p + 4] != b'ROTV':
+            return None
+        n = struct.unpack_from('>I', d, p + 4)[0]
+        p += 8
+        out = []
+        for _ in range(n):
+            ln = struct.unpack_from('>I', d, p + 16)[0]
+            out.append(ln > 1)
+            p += 24 + ln
+        return out
+    except struct.error:
+        return None
 
 
 def material_table(d):
@@ -599,6 +627,10 @@ class Character:
         if tex < 0:
             # untextured pieces (faces, hair) are coloured by their vertex colours, 128 = full brightness,
             # times the attachment's tint (a hair colour)
+            geo = self.geometry(mesh_index)
+            vc = bool(geo and geo[3])
+        elif name.upper().startswith('VERTEXCOLOURS'):
+            # a vertex-colour material over a plain white map (LEGO Marvel): the colours are what shows
             geo = self.geometry(mesh_index)
             vc = bool(geo and geo[3])
         elif self._source(mesh_index)[0].version in (46, 47):

@@ -13,9 +13,10 @@ import shutil
 from . import gamewrite, newchar
 from .formats import classic, datpatch
 
-NXG_EXPORT = {'lb2'}                    # super-hero era games the figure can be written into
+NXG_EXPORT = {'lb2', 'lmsh'}                    # super-hero era games the figure can be written into
 INSTALL_GUESSES = {
     'lb2': ('LEGO Batman 2',),
+    'lmsh': ('LEGO Marvel Super Heroes',),
     'lb1': ('Lego Batman',),
     'indy': ('LEGO Indiana Jones The Original Adventures',),
     'tcs': ('Lego Star Wars Saga',),
@@ -51,7 +52,7 @@ def files_for(game, base_char, glb, mode, name='', report=print):
     (modern.Character in the super-hero era)."""
     if game.id in NXG_EXPORT:
         return nxg_files_for(game, base_char, glb, mode, report)
-    if game.id in ('pirates', 'lmsh'):
+    if game.id == 'pirates':
         raise ExportError(f'putting figures into {game.title} is not built yet')
     txt = classic.character_txt(base_char.path)
     model = gamewrite.write_figure(open(base_char.path, 'rb').read(), glb, game.id, txt, report=report)
@@ -73,38 +74,84 @@ def files_for(game, base_char, glb, mode, name='', report=print):
 
 
 def nxg_files_for(game, base_char, glb, mode, report=print):
-    """LEGO Batman 2: the figure as a model of its own beside the shared one, and the body's definition pointed
-    at it (see nxgwrite). Only replacing the body is built."""
+    """LEGO Batman 2 and LEGO Marvel Super Heroes: the figure as a model of its own beside the shared one, and the
+    body's definition pointed at it (see nxgwrite). Only replacing the body is built."""
     from . import nxgwrite
     if mode != 'replace':
         raise ExportError(f'adding a new character to {game.title} is not built yet: replace a character instead')
-    stem = re.sub(r'[^a-z0-9_]', '_', base_char.name.lower())[:24] + '_ff'
     writer = nxgwrite.NxgWriter(base_char)
-    model = writer.write(glb, stem, report=report)
-    files = {
-        f'chars{BS}minifigs{BS}figureforge{BS}{stem}_nxg.ghg': model,
-        archive_path(game.root, base_char.path): nxgwrite.definition(base_char, f'MiniFigs{BS}FigureForge{BS}{stem.upper()}'),
-    }
+    base = re.sub(r'[^a-z0-9_]', '_', base_char.name.lower())
+    if writer.companion is None:
+        # LEGO Batman 2: any name, in a folder of Figure Forge's own
+        stem = base[:24] + '_ff'
+        out = writer.write(glb, stem, report=report)
+        files = {f'chars{BS}minifigs{BS}figureforge{BS}{stem}_nxg.ghg': out['ghg']}
+        ref = f'MiniFigs{BS}FigureForge{BS}{stem.upper()}'
+    else:
+        # LEGO Marvel: the name has the shared model's length (its resource header names the companions by it),
+        # in a folder beside the shared model's, with a copy of its shaders
+        size = len(writer.stem)
+        stem = ('ff' + base)[:size].ljust(size, '_')
+        out = writer.write(glb, stem, report=report, new_stem=stem)
+        folder = os.path.dirname(os.path.dirname(archive_path(game.root, writer.path)))
+        with open(writer.path[:-len('.ghg')] + '.pc_shaders', 'rb') as f:
+            shaders = f.read()
+        files = {f'{folder}{BS}{stem}{BS}{stem}_nxg.ghg': out['ghg'],
+                 f'{folder}{BS}{stem}{BS}{stem}_nxg.nxg_textures': out['nxg_textures'],
+                 f'{folder}{BS}{stem}{BS}{stem}_nxg.pc_shaders': shaders}
+        rel = folder.split(BS)[1:]                                  # below 'chars'
+        ref = BS.join([x.title() if x.islower() else x for x in rel] + [stem.title(), stem.upper()])
+    files[archive_path(game.root, base_char.path)] = nxgwrite.definition(base_char, ref)
     report(f'{base_char.name} now wears the figure (model {stem}_nxg.ghg).')
     return files
 
 
+def archives(install):
+    """The game's archives: GAME.DAT first, then GAME0.DAT, GAME1.DAT ... (the newer games have several)."""
+    names = [n for n in os.listdir(install) if re.fullmatch(r'(?i)game\d*\.dat', n)]
+    names.sort(key=lambda n: (n.upper() != 'GAME.DAT', len(n), n.upper()))
+    return [os.path.join(install, n) for n in names]
+
+
 def patch(install, files):
-    dat = os.path.join(install, 'GAME.DAT')
-    backup = dat + BACKUP
-    if not os.path.exists(backup):
-        shutil.copy2(dat, backup)
-    replaced, added = datpatch.write_files(dat, files)
-    return {'archive': dat, 'backup': backup, 'replaced': len(replaced), 'added': len(added)}
+    """Each file goes into the archive that already holds it; new files into GAME.DAT. Every archive changed is
+    copied to '<archive>.figureforge-backup' first (once)."""
+    dats = archives(install)
+    if not dats:
+        raise ExportError('no GAME.DAT in the game folder')
+    groups = {}
+    remaining = dict(files)
+    for dat in dats:
+        if not remaining:
+            break
+        held = datpatch.paths(dat) if len(dats) > 1 else {}
+        for path in list(remaining):
+            if len(dats) == 1 or path.lower().replace('/', BS) in held:
+                groups.setdefault(dat, {})[path] = remaining.pop(path)
+    if remaining:
+        groups.setdefault(dats[0], {}).update(remaining)
+    replaced = added = 0
+    for dat, part in groups.items():
+        backup = dat + BACKUP
+        if not os.path.exists(backup):
+            shutil.copy2(dat, backup)
+        r, a = datpatch.write_files(dat, part)
+        replaced += len(r)
+        added += len(a)
+    return {'archive': ', '.join(os.path.basename(d) for d in groups) if len(groups) > 1 else dats[0],
+            'backup': dats[0] + BACKUP, 'replaced': replaced, 'added': added}
 
 
 def restore(install):
-    dat = os.path.join(install, 'GAME.DAT')
-    backup = dat + BACKUP
-    if not os.path.exists(backup):
-        raise ExportError('there is no Figure Forge backup of this game\'s GAME.DAT')
-    shutil.copy2(backup, dat)
-    return {'archive': dat, 'restored_from': backup}
+    done = []
+    for dat in archives(install):
+        if os.path.exists(dat + BACKUP):
+            shutil.copy2(dat + BACKUP, dat)
+            done.append(dat)
+    if not done:
+        raise ExportError("there is no Figure Forge backup of this game's archives")
+    return {'archive': ', '.join(os.path.basename(d) for d in done) if len(done) > 1 else done[0],
+            'restored_from': done[0] + BACKUP}
 
 
 def mod_folder(folder, files, title, game_title):

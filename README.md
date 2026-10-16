@@ -83,14 +83,14 @@ says which layers the game shows and which animations it uses. Figure Forge:
 | the user interface in headless Microsoft Edge: every step, every export, saving and reopening a project | all passed |
 | exports opened in Blender: GLB, glTF, FBX, `.blend` (one armature, skinned meshes, moving bones); STL, PLY, OBJ | all passed |
 | the Windows build, started as a server | serves the page and the games |
-| a figure put into a copy of LEGO Batman 2's GAME.DAT (`tests/check_nxg_export.py`), read back | the body wears it; every other file untouched; Restore gives the archive back |
+| a figure put into a copy of LEGO Batman 2's and of LEGO Marvel's GAME.DAT (`tests/check_nxg_export.py`), read back | the body wears it; every other file untouched; Restore gives the archive back |
 
 ## Limits
 
 - Faces do not animate: the games' expression tracks are not read.
 - Figures go into LEGO Batman, Indiana Jones and Star Wars (replace a character or add one) and into LEGO
-  Batman 2 (replace a character only). Not yet into LEGO Marvel Super Heroes or LEGO Pirates. The LEGO Batman 2
-  export is checked by reading the archive back; it has not been tried in the running game.
+  Batman 2 and LEGO Marvel Super Heroes (replace a character only). Not yet into LEGO Pirates. The LEGO Batman 2
+  and Marvel exports are checked by reading the archive back; they have not been tried in the running games.
 - A part fitted from a very different body (a droid's torso on a minifig) keeps its own shape and may need a
   touch of rigging.
 - An uploaded part that is skinned takes the single nearest bone; it does not blend between bones.

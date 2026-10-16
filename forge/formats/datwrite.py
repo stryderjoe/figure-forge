@@ -28,8 +28,9 @@ def read_tree(info):
     version, count = struct.unpack_from('<ii', info, 0)
     pos = 8 + count * 16
     (nn,) = struct.unpack_from('<i', info, pos)
-    recs = [struct.unpack_from('<hhi', info, pos + 4 + 8 * i) for i in range(nn)]
-    pos += 4 + nn * 8
+    rs = 12 if version == -5 else 8              # -5 (LEGO Marvel) adds 4 zero bytes to each name record
+    recs = [struct.unpack_from('<hhi', info, pos + 4 + rs * i) for i in range(nn)]
+    pos += 4 + nn * rs
     (ns,) = struct.unpack_from('<i', info, pos)
     blob = info[pos + 4:pos + 4 + ns]
 
@@ -118,7 +119,7 @@ def build_index(version, files, order=None, names_pad=None):
         out += struct.pack('<IIII', *files[p])
     out += struct.pack('<i', len(records))
     for nx, pv, no in records:
-        out += struct.pack('<hhi', nx, pv, no)
+        out += struct.pack('<hhi', nx, pv, no) + (bytes(4) if version == -5 else b'')
     # the originals pad the names (by 1 to 7 bytes, by no rule found); 4-byte alignment is used for new ones
     names += b'\0' * (names_pad if names_pad is not None else (-len(names)) % 4)
     out += struct.pack('<i', len(names)) + bytes(names)
@@ -127,7 +128,7 @@ def build_index(version, files, order=None, names_pad=None):
 
 
 def build_index_linked(info, old_paths, files):
-    """Index -4 (LEGO Batman 2) with files added, keeping the archive's own name records: there a folder's first
+    """Index -4 (LEGO Batman 2) or -5 (LEGO Marvel Super Heroes) with files added, keeping the archive's own name records: there a folder's first
     child follows it directly and every later child points back to its previous sibling, in no depth-first order,
     so new records go at the end (a new folder directly followed by its first child) and each folder's last-child
     number follows. old_paths: the archive's paths by file number; files: {path: (off_hi, zsize, size, flags)}
@@ -135,8 +136,10 @@ def build_index_linked(info, old_paths, files):
     version, count = struct.unpack_from('<ii', info, 0)
     pos = 8 + 16 * count
     (nrec,) = struct.unpack_from('<i', info, pos)
-    recs = [list(struct.unpack_from('<hhi', info, pos + 4 + 8 * i)) for i in range(nrec)]
-    pos += 4 + 8 * nrec
+    rs = 12 if version == -5 else 8              # -5 (LEGO Marvel): 4 more bytes per record, kept as they are
+    recs = [list(struct.unpack_from('<hhi', info, pos + 4 + rs * i)) + [info[pos + 4 + rs * i + 8:pos + 4 + rs * i + rs]]
+            for i in range(nrec)]
+    pos += 4 + rs * nrec
     (nsz,) = struct.unpack_from('<i', info, pos)
     names = bytearray(info[pos + 4:pos + 4 + nsz])
 
@@ -146,7 +149,7 @@ def build_index_linked(info, old_paths, files):
     # every record's full path, as the reader finds it
     full, parent, last_dir = [''] * nrec, [''] * nrec, 0
     dirs = {'': 0}
-    for i, (nxt, prev, noff) in enumerate(recs):
+    for i, (nxt, prev, noff, _x) in enumerate(recs):
         if i == 0:
             continue
         parent[i] = parent[prev] if prev else full[last_dir]
@@ -157,7 +160,7 @@ def build_index_linked(info, old_paths, files):
     listed = sorted(files, key=path_hash)
     place = {p.lower(): i for i, p in enumerate(listed)}
     old = {p.lower() for p in old_paths}
-    for i, (nxt, _prev, _noff) in enumerate(recs):
+    for i, (nxt, _prev, _noff, _x) in enumerate(recs):
         if i and nxt <= 0 and full[i].lower() in place:
             recs[i][0] = -place[full[i].lower()]
 
@@ -166,7 +169,7 @@ def build_index_linked(info, old_paths, files):
         names.extend(name.encode('latin1') + b'\0')
         last = recs[parent_index][0]
         prev = last if last > 0 and parent_index not in fresh else 0
-        recs.append([nxt, prev, at])
+        recs.append([nxt, prev, at, bytes(rs - 8)])
         idx = len(recs) - 1
         recs[parent_index][0] = idx
         fresh.discard(parent_index)
@@ -190,8 +193,8 @@ def build_index_linked(info, old_paths, files):
     for p in listed:
         out += struct.pack('<IIII', *files[p])
     out += struct.pack('<i', len(recs))
-    for nx, pv, no in recs:
-        out += struct.pack('<hhi', nx, pv, no)
+    for nx, pv, no, extra in recs:
+        out += struct.pack('<hhi', nx, pv, no) + extra
     names += b'\0' * ((-len(names)) % 4)
     out += struct.pack('<i', len(names)) + bytes(names)
     out += b''.join(struct.pack('<I', path_hash(p)) for p in listed) + b'\0' * 8
