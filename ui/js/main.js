@@ -512,10 +512,6 @@ function gamePanel() {
   const install = S.installs && S.installs[gid];
   const radio = (key, value, label) => el('label', { class: 'inline', style: 'display:flex;margin:4px 0' },
     el('input', { type: 'radio', name: 'gx-' + key, checked: g[key] === value, onchange: () => { g[key] = value; render(); } }), label);
-  // super-hero era: LEGO Batman 2, Marvel and Pirates take figures; LEGO Batman 3 is not built yet
-  const nxg = ['pirates', 'lb2', 'lmsh'].includes(gid);
-  if (gid === 'lb3') return [el('h3', {}, 'Into the game'),
-    el('p', { class: 'hint' }, `Putting figures into ${S.titles[gid]} is not built yet. LEGO Batman 2, LEGO Marvel Super Heroes, LEGO Pirates and the three classic games can take them.`)];
   return [
     el('h3', {}, 'Into the game'),
     el('p', { class: 'hint' }, `Puts the figure into ${S.titles[gid]}, built on ${body ? body.name : 'your body'}'s skeleton, so its abilities and animations come with it. Parts from other games are converted. Close the game first.`),
@@ -524,11 +520,11 @@ function gamePanel() {
     g.mode === 'new' ? el('label', {}, 'New character name (letters, digits, _)',
       el('input', { value: g.name, placeholder: 'my_hero', oninput: e => { g.name = e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, ''); e.target.value = g.name; } })) : null,
     g.mode === 'new' ? el('p', { class: 'hint' }, "A new character joins the game's character list. A level or cutscene uses it once its text names it; that is not set from here yet.") : null,
-    radio('delivery', 'patch', install ? `Patch the game (backup kept beside GAME.DAT)` : 'Patch the game (install folder not found: set it in Settings)'),
+    radio('delivery', 'patch', install ? `Patch the game (a backup of each archive changed is kept beside it)` : 'Patch the game (install folder not found: set it in Settings)'),
     radio('delivery', 'mod', 'Make a mod folder (loose files)'),
     el('div', { class: 'row' },
       el('button', { class: 'primary', disabled: g.delivery === 'patch' && !install, onclick: () => gameExport() }, 'Put it in the game'),
-      install ? el('button', { title: 'Copy the backup over GAME.DAT, undoing every Figure Forge change', onclick: () => gameRestore(gid) }, 'Restore original') : null),
+      install ? el('button', { title: "Copy the backups over the game's archives, undoing every Figure Forge change", onclick: () => gameRestore(gid) }, 'Restore original') : null),
     S.gxResult ? el('p', { class: 'hint ' + (S.gxResult.error ? 'bad' : 'ok') }, S.gxResult.text) : null,
   ];
 }

@@ -13,10 +13,11 @@ import shutil
 from . import gamewrite, newchar
 from .formats import classic, datpatch
 
-NXG_EXPORT = {'lb2', 'lmsh', 'pirates'}                    # super-hero era games the figure can be written into
+NXG_EXPORT = {'lb2', 'lmsh', 'pirates', 'lb3'}             # super-hero era games the figure can be written into
 INSTALL_GUESSES = {
     'lb2': ('LEGO Batman 2',),
     'lmsh': ('LEGO Marvel Super Heroes',),
+    'lb3': ('LEGO Batman 3 Beyond Gotham',),
     'pirates': ('LEGO\u00ae Pirates of the Caribbean The Video Game', 'LEGO Pirates of the Caribbean The Video Game'),
     'lb1': ('Lego Batman',),
     'indy': ('LEGO Indiana Jones The Original Adventures',),
@@ -53,8 +54,6 @@ def files_for(game, base_char, glb, mode, name='', report=print):
     (modern.Character in the super-hero era)."""
     if game.id in NXG_EXPORT:
         return nxg_files_for(game, base_char, glb, mode, name, report)
-    if game.id == 'lb3':
-        raise ExportError(f'putting figures into {game.title} is not built yet')
     txt = classic.character_txt(base_char.path)
     model = gamewrite.write_figure(open(base_char.path, 'rb').read(), glb, game.id, txt, report=report)
     if mode == 'replace':
@@ -75,8 +74,9 @@ def files_for(game, base_char, glb, mode, name='', report=print):
 
 
 def nxg_files_for(game, base_char, glb, mode, name='', report=print):
-    """LEGO Batman 2 and LEGO Marvel Super Heroes: the figure as a model of its own beside the shared one, and the
-    body's definition pointed at it (see nxgwrite), replacing the body or as a new character."""
+    """LEGO Batman 2, LEGO Marvel Super Heroes, LEGO Pirates and LEGO Batman 3: the figure as a model of its own beside
+    the shared one, and the body's definition pointed at it (see nxgwrite), replacing the body or as a new
+    character. LEGO Batman 3 also gets the '.res' lists the PC game loads with the model and the definition."""
     from . import nxgwrite
     if mode not in ('replace', 'new'):
         raise ExportError('mode must be replace or new')
@@ -99,25 +99,77 @@ def nxg_files_for(game, base_char, glb, mode, name='', report=print):
         out = writer.write(glb, stem, report=report)
         files = {f'{folder}{BS}{stem}_nxg.ghg': out['ghg']}
     else:
-        # LEGO Marvel: the name has the shared model's length (its resource header names the companions by it),
-        # with a copy of the shared model's shaders
+        # LEGO Marvel and LEGO Batman 3: the name has the shared model's length (its resource header names the
+        # companions by it), with a copy of the shared model's shaders
         size = len(writer.stem)
         stem = ('ff' + base)[:size].ljust(size, '_')
         out = writer.write(glb, stem, report=report, new_stem=stem)
         with open(writer.path[:-len('.ghg')] + '.pc_shaders', 'rb') as f:
             shaders = f.read()
-        files = {f'{folder}{BS}{stem}_nxg.ghg': out['ghg'],
-                 f'{folder}{BS}{stem}_nxg.nxg_textures': out['nxg_textures'],
-                 f'{folder}{BS}{stem}_nxg.pc_shaders': shaders}
+        pf = writer.platform
+        files = {f'{folder}{BS}{stem}{pf}.ghg': out['ghg'],
+                 f'{folder}{BS}{stem}{pf}.nxg_textures': out['nxg_textures'],
+                 f'{folder}{BS}{stem}{pf}.pc_shaders': shaders}
+    lb3 = game.id == 'lb3'
     ref = BS.join(rel + [stem.upper()])
-    cd = list_model(nxgwrite.definition(base_char, ref), folder, stem, 'lmsh')
+    if lb3:
+        ref = 'Chars' + BS + ref                    # LEGO Batman 3 names models from 'Chars' (arkillo.cd)
+    cd = list_model(nxgwrite.definition(base_char, ref), folder, stem, 'lb3' if lb3 else 'lmsh')
+    model_name = f'{stem}{writer.platform}.ghg'
     if new is None:
-        files[archive_path(game.root, base_char.path)] = cd
-        report(f'{base_char.name} now wears the figure (model {stem}_nxg.ghg).')
+        cd_rel = archive_path(game.root, base_char.path)
+        files[cd_rel] = cd
+        if lb3:
+            files.update(lb3_resources(game, files, [f'{folder}{BS}{model_name}', cd_rel]))
+        report(f'{base_char.name} now wears the figure (model {model_name}).')
         return files
     files.update(nxg_new_character(game, base_char, new, cd))
-    report(f'{new} joins the character list (from {base_char.name}, model {stem}_nxg.ghg).')
+    if lb3:
+        files.update(lb3_resources(game, files, [f'{folder}{BS}{model_name}',
+                                                 next(k for k in files if k.lower().endswith(f'{BS}{new}.cd'))]))
+    report(f'{new} joins the character list (from {base_char.name}, model {model_name}).')
     return files
+
+
+def lb3_resources(game, files, which):
+    """LEGO Batman 3: '<file>.res' for each file named (archive paths among files), worked out from its own
+    resource header and the headers of what it lists (the new files first, then the game's), as the build
+    writes them (hser.pc_resources); the bookkeeping is taken from the base file's '.res'."""
+    from .formats import hser
+    mine = {k.replace(BS, '/').lower(): v for k, v in files.items()}
+    cache = {}
+
+    def own(path):
+        if path not in cache:
+            cache[path] = None
+            data = mine.get(path.lower())
+            if data is None:
+                p = os.path.join(game.root, *path.split('/'))
+                if os.path.exists(p):
+                    with open(p, 'rb') as f:
+                        data = f.read()
+            if data is not None and hser.has_header(data):
+                cache[path] = hser.entries(hser.read(data)[0])
+        return cache[path]
+
+    out = {}
+    for rel in which:
+        records = hser.pc_resources(own(rel.replace(BS, '/').lower()) or [], own)
+        like = _like_res(game, rel)
+        out[rel + '.res'] = hser.build(records, hser.read(like)[0])
+    return out
+
+
+def _like_res(game, rel):
+    """The '.res' whose bookkeeping a new one copies: the file's own, else one of the same kind beside the shared
+    minifigure model or definition."""
+    p = os.path.join(game.root, rel + '.res')
+    if os.path.exists(p):
+        return open(p, 'rb').read()
+    folder = os.path.join(game.root, 'chars', 'super_character', 'super_minifig')
+    name = 'super_minifig_dx11.ghg.res' if rel.lower().endswith('.ghg') else 'super_minifig.cd.res'
+    with open(os.path.join(folder, name), 'rb') as f:
+        return f.read()
 
 
 def list_model(cd, folder, stem, game_id):
@@ -144,7 +196,9 @@ def nxg_new_character(game, base_char, new, cd):
     game reads its character texts from."""
     from .formats import pack
     chars = os.path.join(game.root, 'chars')
-    folder = BS.join(['chars', 'minifigs', new])
+    # LEGO Batman 3 keeps them in chars\minifig (the singular)
+    kind = 'minifig' if game.id == 'lb3' else 'minifigs'
+    folder = BS.join(['chars', kind, new])
     out = {f'{folder}{BS}{new}.cd': cd}
     txt_path = base_char.path[:-3] + '.txt'
     txt = open(txt_path, 'rb').read() if os.path.exists(txt_path) else b''
@@ -219,9 +273,10 @@ def mod_folder(folder, files, title, game_title):
             f.write(data)
     with open(os.path.join(folder, 'README.txt'), 'w', encoding='utf-8') as f:
         f.write(f'{title}: a Figure Forge mod for {game_title}.\n\n'
-                'The game reads these loose files only when its GAME.DAT is out of the way:\n'
+                'The game reads these loose files only when its archives (GAME.DAT, and GAME0.DAT ... in the\n'
+                'newer games) are out of the way:\n'
                 '1. Back up the game folder.\n'
-                '2. Unpack GAME.DAT into the game folder with a TT archive extractor, then rename GAME.DAT.\n'
+                '2. Unpack the archives into the game folder with a TT archive extractor, then rename them.\n'
                 '3. Copy the contents of this folder into the game folder, replacing files.\n\n'
                 'Or let Figure Forge patch the archive directly (Export > Into the game > Patch).\n'
                 'This mod holds files made from your own copy of the game: do not share it publicly.\n')
