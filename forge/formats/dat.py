@@ -70,9 +70,12 @@ class DatArchive:
         # -1: LEGO Star Wars II (2006, PC): as -2, but no hash table or trailer after the names, offsets are plain
         # byte positions, and every entry is stored (verified 2026-10-15: all 8,136 entries of game.dat, each span
         # identical to the file; no compressed -1 entry has been seen, so one is refused in read()).
-        rec_size = {-1: 8, -2: 8, -3: 8, -4: 8, -5: 12}.get(self.version)
+        # -6: LEGO Batman 3: Beyond Gotham (2014): 12-byte name records {i16 next, i16 prev, i32 name offset,
+        # i16 parent, i16 0}: the parent is given (record 0 is the root); a file's next is minus its file number.
+        # The file offset is (off_hi << 8) | (flags >> 24); flags & 0xff is the compression (0 or 2 seen).
+        rec_size = {-1: 8, -2: 8, -3: 8, -4: 8, -5: 12, -6: 12}.get(self.version)
         if rec_size is None:
-            raise ValueError(f"{path}: index version {self.version} not handled (-1, -2, -3, -4 and -5 verified)")
+            raise ValueError(f"{path}: index version {self.version} not handled (-1 to -6 verified)")
 
         def table(fmt, at):
             if at < 0 or at + struct.calcsize(fmt) > len(info):
@@ -88,6 +91,7 @@ class DatArchive:
             raise ValueError(f"{path}: implausible name count {name_count}")
         pos += 4
         recs = [table("<hhi", pos + i * rec_size) for i in range(name_count)]
+        parents = [table("<h", pos + i * rec_size + 8)[0] for i in range(name_count)] if self.version == -6 else None
         pos += name_count * rec_size
         (names_size,) = table("<i", pos)
         if not 0 < names_size <= len(info) - pos - 4:
@@ -117,7 +121,11 @@ class DatArchive:
                 continue
             if not 0 <= prev < i or nxt >= name_count:
                 raise ValueError(f"{path}: name record {i} points outside the name tree")
-            if prev != 0:
+            if parents is not None:
+                if not 0 <= parents[i] < i:
+                    raise ValueError(f"{path}: name record {i} has a bad parent {parents[i]}")
+                parent[i] = full[parents[i]]
+            elif prev != 0:
                 parent[i] = parent[prev]
             else:
                 parent[i] = full[last_dir]
@@ -143,6 +151,8 @@ class DatArchive:
                 offset = off_hi
             elif self.version == -4:
                 offset = off_hi << 8
+            elif self.version == -6:
+                offset = (off_hi << 8) | (flags >> 24)
             else:
                 offset = (off_hi << 8) | ((flags >> 8) & 0xFF)
             # a file may also lie after the index: Figure Forge appends replaced files there (the games read them)

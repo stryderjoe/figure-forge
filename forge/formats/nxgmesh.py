@@ -116,8 +116,16 @@ class MeshSection:
             # remaining vertices do not move), u32 n, n * u32. Kept as byte ranges; offsets read in morphs().
             part['morphs'] = []
             if self.version == 175 and morphs:
-                # LEGO Batman 3 writes its expressions in a layout not read yet: they are skipped, and the next
-                # part is the first place after them that reads as a part start (the last part ends the section)
+                # LEGO Batman 3: per target 'ROTV' 0, u32 2, u32 size (of what follows), u32 (not understood), 12
+                # zero bytes, run records ({u32 count, vec3} as the older sparse targets), then 'ROTV' n, n words.
+                # Where that does not hold, the targets are skipped up to the next part start.
+                read = self._morphs175(c.p, morphs)
+                if read is not None:
+                    part['morphs'], c.p = read
+                    self.serial += 3 * len(morphs)
+                    c.take(self.tail)
+                    self.parts.append(part)
+                    continue
                 q = self._next_part175(c.p)
                 c.p = q if q is not None else self._mesh_end175(c.p)
                 self.serial += 3 * len(morphs)
@@ -200,6 +208,29 @@ class MeshSection:
                 if not done:
                     raise MeshError('buffer references do not resolve')
                 left = [r for r in left if r not in done]
+
+    def _morphs175(self, p, targets):
+        d = self.d
+        out = []
+        try:
+            for target in targets:
+                if d[p:p + 4] != b'ROTV':
+                    return None
+                size = struct.unpack_from('>I', d, p + 12)[0]       # counted from after itself
+                runs = p + 32
+                if p + 16 + size > len(d) or size % 16 or size < 16:
+                    return None
+                out.append((target, 'runs', runs, size - 16))
+                p = p + 16 + size
+                if d[p:p + 4] != b'ROTV':
+                    return None
+                n = struct.unpack_from('>I', d, p + 4)[0]
+                p += 8 + 4 * n
+        except struct.error:
+            return None
+        if self._next_part175(p) not in (p + self.tail, None):
+            return None
+        return out, p
 
     def _next_part175(self, p):
         """The next LEGO Batman 3 part record after p: u32 1, a stream count of 1 to 4, then a new vertex buffer
