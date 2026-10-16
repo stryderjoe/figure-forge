@@ -40,7 +40,8 @@ def main(argv):
         page.wait("document.body && document.body.dataset.ready === '1'", int(os.environ.get('SHEET_WAIT', 1800)))
         page.js("(() => { FF.S.step = 'export'; FF.render(); return 1; })()")
         for item in bases:
-            base, _, clip = item.partition('@')         # 'lb2:batman/batman@idle' plays a clip, frozen at 30 %
+            back = item.endswith('~back')                # 'lmsh:thor/thor~back' shows the figure from behind
+            base, _, clip = item.replace('~back', '').partition('@')   # '...@idle' plays a clip, frozen at 30 %
             try:
                 page.js(f"(async () => {{ FF.viewer.stop && FF.viewer.stop(); await FF.setBase('{base}'); return 1; }})()")
                 if clip:
@@ -50,6 +51,9 @@ def main(argv):
                     except Exception as e:      # no such clip: the figure as it stands
                         print('  no clip:', str(e)[:120], flush=True)
                 info = page.js("""(async () => { await FF.viewer.whenTexturesReady(); FF.viewer.frameFigure();
+                    if (%s) { const v = FF.viewer, t = v.controls.target;
+                              v.camera.position.set(2 * t.x - v.camera.position.x, v.camera.position.y,
+                                                    2 * t.z - v.camera.position.z); v.camera.lookAt(t); }""" % ('true' if back else 'false') + """
                     await new Promise(r => setTimeout(r, 400));
                     return FF.viewer.snapshot(320, 400); })()""")
                 im = Image.open(io.BytesIO(base64.b64decode(info.split(',', 1)[1]))).convert('RGB')

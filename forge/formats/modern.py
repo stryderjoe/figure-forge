@@ -64,8 +64,42 @@ class Model:
     @property
     def material_names(self):
         if self._names is None:
-            self._names = material_names(self.d)
+            self._table = material_table(self.d)
+            self._names = [n for n, _ in self._table]
         return self._names
+
+    @property
+    def bundle(self):
+        """(file, [(start, end)]) of the model's own textures: its .nxg_textures companion (LEGO Marvel), else
+        the DDS images inside the model (LEGO Batman 2)."""
+        if getattr(self, '_bundle', None) is None:
+            comp = self.path.rsplit('.', 1)[0] + '.nxg_textures'
+            src = comp if os.path.exists(comp) else self.path
+            with open(src, 'rb') as f:
+                data = f.read()
+            starts, at = [], data.find(b'DDS |')
+            while at >= 0:
+                starts.append(at)
+                at = data.find(b'DDS |', at + 4)
+            self._bundle = (src, [(x, starts[i + 1] if i + 1 < len(starts) else len(data))
+                                  for i, x in enumerate(starts)])
+        return self._bundle
+
+    def colour_texture(self, material_index):
+        """(file, start, end) of a material's own colour map, or None."""
+        names = self.material_names
+        if getattr(self, '_slots', None) is None:
+            self._slots = texture_slots(self.d, self._table, len(self.bundle[1]))
+        if not 0 <= material_index < len(names) or self._slots[material_index] is None:
+            return None
+        t = self._slots[material_index][0]
+        if t < 0 or t >= len(self.bundle[1]):
+            return None
+        return (self.bundle[0],) + self.bundle[1][t]
+
+    def material_by_name(self, name):
+        names = [n.split(':')[0].lower() for n in self.material_names]
+        return names.index(name.lower()) if name.lower() in names else -1
 
 
 def model(path):
@@ -92,6 +126,21 @@ def _model_index(chars_dir):
     return _MODELS[chars_dir]
 
 
+_CDS = {}
+
+
+def _cd_index(chars_dir):
+    """{definition file name (lower case): path} under chars (cached)."""
+    if chars_dir not in _CDS:
+        out = {}
+        for dirpath, _dirs, files in os.walk(chars_dir):
+            for f in files:
+                if f.lower().endswith('.cd'):
+                    out.setdefault(f.lower(), os.path.join(dirpath, f))
+        _CDS[chars_dir] = out
+    return _CDS[chars_dir]
+
+
 def load_clip(ref):
     """'<pack path>::<entry name>' -> the animation block for the main skeleton (the one with most nodes)."""
     from . import an3, pack, ttdeflate
@@ -107,10 +156,10 @@ def load_clip(ref):
     return max(blocks, key=lambda b: b.nodes)
 
 
-def material_names(d):
-    """Names of the model's materials, in table order. Every material record starts with the word 2 and holds its
-    name (u16 length, text, zero) at one fixed distance from that start, which differs between files: the
-    distance that gives a valid name for most records is the one."""
+def material_table(d):
+    """[(name, position of its length word)] of the model's materials, in table order. Every material record
+    starts with the word 2 and holds its name (u16 length, text, zero) at one fixed distance from that start,
+    which differs between files: the distance that gives a valid name for most records is the one."""
     import collections
     import re
     a = d.find(b'LTMU')
@@ -134,13 +183,40 @@ def material_names(d):
     if not hits:
         return []
     k = hits.most_common(1)[0][0]
-    names, last = [], -1
+    out, last = [], -1
     for c in starts:
         nm = name(c + k)
         if nm and c > last:
-            names.append(nm)
+            out.append((nm, c + k))
             last = c + k
-    return names[:count]
+    return out[:count]
+
+
+def material_names(d):
+    return [n for n, _ in material_table(d)]
+
+
+def texture_slots(d, table, texture_count):
+    """Per material the 18 texture numbers of its record (-1 = none; slot 0 is the colour map). They end a
+    fixed distance before the name: 564 bytes in LEGO Marvel's material versions 176 and 177 (measured on
+    material-remap and helmet models); for other versions the distance where every number is valid and most
+    colour maps are set."""
+    a = d.find(b'LTMU')
+    version = struct.unpack_from('>I', d, a + 4)[0] if a >= 0 else 0
+    gaps = [564] if version in (176, 177) else list(range(520, 640, 4))
+    best = None
+    for gap in gaps:
+        rows = []
+        for _n, at in table:
+            if at - gap < 0:
+                break
+            rows.append(struct.unpack_from('>18i', d, at - gap))
+        if len(rows) != len(table) or not all(-1 <= x < max(texture_count, 1) for r in rows for x in r):
+            continue
+        score = sum(1 for r in rows if r[0] >= 0)
+        if best is None or score > best[0]:
+            best = (score, rows)
+    return best[1] if best else [None] * len(table)
 
 
 def _find(root, rel):
@@ -158,7 +234,9 @@ def _find(root, rel):
 
 
 class Character:
-    def __init__(self, cd_path, chars_dir):
+    def __init__(self, cd_path, chars_dir, depth=0):
+        self._depth = depth
+        self._baked = {}            # mesh number -> geometry fixed in a pose (attachments with a skeleton)
         self.path = cd_path
         self.chars_dir = chars_dir
         self.name = os.path.splitext(os.path.basename(cd_path))[0]
@@ -196,6 +274,10 @@ class Character:
             g = o['fields']
             if o['class'] == 'Character Texture' and isinstance(g.get('Texture File'), str):
                 self.role_textures[g.get('Material')] = g['Texture File']
+            elif o['class'] == 'Character Material' and g.get('Source Material Resource File'):
+                # LEGO Marvel: the role wears a named material of another model (a material remap)
+                self.role_textures.setdefault(g.get('Material'), ('material', g['Source Material Resource File'],
+                                                                  g.get('Source Material') or ''))
             elif o['class'] == 'Character Layer Special':
                 self.layer_choice[g.get('Layer Id')] = g.get('Layer Special')
             elif o['class'] == 'Character Attachment':
@@ -233,6 +315,8 @@ class Character:
                 index = _model_index(self.chars_dir)
                 path = index.get(stem.lower() + '_nxg.ghg') or index.get(stem.lower() + '_nxg.gsc')
             if not path:
+                # LEGO Marvel: capes and skinned hair are small definitions of their own (cape_red.cd)
+                self._sub_attachment(att, stem)
                 continue
             try:
                 am = model(path)
@@ -282,6 +366,89 @@ class Character:
                               'meshes': sorted(mats), 'mats': mats, 'matrix': place})
             self.layers.append({'index': len(self.layers), 'name': f'TT_{label}', 'chosen': True, 'parts': parts})
 
+    def _sub_attachment(self, att, stem):
+        """An attachment that is a definition (a cape, skinned hair): its visible pieces, skinned to its own
+        skeleton, are fixed in the first frame of its idle (a hanging cape, settled hair) and placed on the
+        locator like any rigid attachment. Its colour is the definition's tint times the attachment's."""
+        from .. import anim
+        cd = _cd_index(self.chars_dir).get(stem.lower() + '.cd')
+        if not cd or getattr(self, '_depth', 0) > 1:
+            return
+        try:
+            sub = Character(cd, self.chars_dir, depth=getattr(self, '_depth', 0) + 1)
+        except (FormatError, ValueError, struct.error, IndexError, OSError):
+            return
+        locators, remap = self.skel['locators'], self.skel['remap']
+        loc = att.get('Locator')
+        li = remap[loc] if isinstance(loc, int) and 0 <= loc < len(remap) else 255
+        if li == 255 or li >= len(locators):
+            return
+        sub.id = f'{getattr(self, "id", self.name)}#{stem}'
+        sub.common = []
+        # the idle's first frame: local matrices in the model's space, then world matrices
+        world = [list(b['world']) for b in sub.bones]
+        try:
+            clips = anim.clip_list(sub)
+            pick = (next((c for c in clips if c['name'].lower() == 'idle'), None)
+                    or next((c for c in clips if 'idle' in c['name'].lower()), None) or (clips[0] if clips else None))
+            if pick:
+                from . import classic as _classic
+                clip = _classic.load_clip(pick['file'])
+                pose = clip.pose(0)
+                nf = getattr(clip, 'node_flags', None) or []
+                world = []
+                import numpy as np
+                from .. import skeleton as _skel
+                for j, b in enumerate(sub.bones):
+                    if j < len(pose):
+                        m = anim.node_matrix(sub, j, pose[j], nf[j] if j < len(nf) else 0)
+                        local = _skel.mirror(np.asarray(m).reshape(16)).reshape(16).tolist()
+                    else:
+                        local = list(b['bind_local'])
+                    world.append(local if b['parent'] < 0 else mat_mul(local, world[b['parent']]))
+        except (FormatError, ValueError, struct.error, IndexError, OSError, StopIteration):
+            world = [list(b['world']) for b in sub.bones]
+        import numpy as np
+        skin_m = [np.linalg.inv(np.asarray(b['world'], dtype=np.float64).reshape(4, 4)) @
+                  np.asarray(w, dtype=np.float64).reshape(4, 4) for b, w in zip(sub.bones, world)]
+        k = len(self.attached)
+        self.attached.append(sub.base)
+        t = tuple(att.get('Tint Colour') or (1.0, 1.0, 1.0))
+        dt = sub.cd.roots[0][0]['fields'].get('Default Tint Colour') or (1.0, 1.0, 1.0)
+        self.tints.append((t[0] * dt[0], t[1] * dt[1], t[2] * dt[2]))
+        base = 100000 * (k + 1)
+        meshes, mats = [], {}
+        shown = sub.default_layers
+        for L in sub.layers:
+            if L['name'].startswith('TT_') or (shown is not None and L['index'] not in shown):
+                continue
+            for part in L['parts']:
+                for mi in part['meshes']:
+                    geo = sub.geometry(mi)
+                    if geo is None:
+                        continue
+                    pos, nrm, uv, col, tris, skin = geo
+                    out = []
+                    for i, v in enumerate(pos):
+                        acc = np.zeros(3)
+                        weights = skin[i] if skin and skin[i] else [(part['bone'] if part['bone'] >= 0 else 0, 1.0)]
+                        for bj, w in weights:
+                            if bj < len(skin_m):
+                                acc += w * (np.array([v[0], v[1], v[2], 1.0]) @ skin_m[bj])[:3]
+                        out.append(tuple(acc))
+                    self._baked[base + mi] = (out, [], uv, col, tris, None)
+                    mats[base + mi] = part['mats'].get(mi, 0)
+                    meshes.append(base + mi)
+        if not meshes:
+            self.attached.pop()
+            self.tints.pop()
+            return
+        self._mesh_mat.update(mats)
+        self.layers.append({'index': len(self.layers), 'name': f'TT_{att.get("Attachment Name") or stem}',
+                            'chosen': True, 'parts': [{'special': stem, 'kind': 'rigid', 'bone': locators[li]['joint'],
+                                                       'meshes': meshes, 'mats': mats,
+                                                       'matrix': list(locators[li]['matrix'])}]})
+
     def _model(self, override, skeleton):
         if override:
             rel = override.replace('\\', '/').split('/')
@@ -297,7 +464,10 @@ class Character:
             if hit:
                 return hit
         own = os.path.join(os.path.dirname(self.path), self.name + '_nxg.ghg')
-        return own if os.path.exists(own) else None
+        if os.path.exists(own):
+            return own
+        # a definition naming its skeleton after a model of its own (capes, skinned hair): cape_nxg.ghg
+        return _model_index(self.chars_dir).get(skeleton.lower() + '_nxg.ghg') if skeleton else None
 
     def _layers(self):
         specials = self.disp['specials']
@@ -311,11 +481,11 @@ class Character:
                 sp = specials[item['special']]
                 if want is not None and sp['name'] != want:
                     continue
-                if want is None and not sp['name'].lower().endswith('_mesh'):
-                    continue
                 low = sp['name'].lower()
+                # without a choice: the plain variant (not the skeleton, mech, depth-only head, glove or
+                # break-apart pieces); big figures' pieces are not called '..._Mesh'
                 if want is None and ('skeleton' in low or 'mech' in low or low.startswith('zhead')
-                                     or 'boxing' in low):
+                                     or 'boxing' in low or 'breakup' in low):
                     continue
                 part = {'special': sp['name'], 'meshes': [m for m, _mat in sp['parts']],
                         'mats': {m: mat for m, mat in sp['parts']},
@@ -340,6 +510,8 @@ class Character:
         return self.mesh, self.base.material_names, mesh_index
 
     def geometry(self, mesh_index):
+        if mesh_index in self._baked:
+            return self._baked[mesh_index]
         mesh, _names, i = self._source(mesh_index)
         try:
             pos, nrm, uv, col, tris, skin = mesh.geometry(i)
@@ -357,6 +529,9 @@ class Character:
         if path is None and role == 'CAPE_INSIDE':
             path = self.role_textures.get(ROLE['CAPE'])          # no lining of its own: the cape's texture
         tex = -1
+        if isinstance(path, tuple):
+            tex = self._remap_texture(path)
+            path = None
         if path:
             tex = self._tex_index.get(path)
             if tex is None:
@@ -370,17 +545,28 @@ class Character:
                     tex = len(self.textures)
                     self.textures.append(full)
                 self._tex_index[path] = tex
+        if tex < 0 and mi is not None:
+            # the model's own colour map (helmets, hats, big figures)
+            owner = self.attached[mesh_index // 100000 - 1] if mesh_index >= 100000 else self.base
+            own = owner.colour_texture(mi)
+            if own:
+                tex = self._texture_index(own)
         colour, vc = (1.0, 1.0, 1.0, 1.0), False
         if tex < 0:
             # untextured pieces (faces, hair) are coloured by their vertex colours, 128 = full brightness,
             # times the attachment's tint (a hair colour)
             geo = self.geometry(mesh_index)
             vc = bool(geo and geo[3])
-            if mesh_index >= 100000:
-                t = self.tints[mesh_index // 100000 - 1]
-                colour = (t[0], t[1], t[2], 1.0)
+        if mesh_index >= 100000:
+            # an attachment's tint (hair colour, a cape's colour) multiplies its texture or vertex colours
+            t = self.tints[mesh_index // 100000 - 1]
+            colour = (t[0], t[1], t[2], 1.0)
+        # vertex colours are sRGB; LEGO Batman 2 stores them at half strength (128 = full), LEGO Marvel at full
+        owner_mesh = self.attached[mesh_index // 100000 - 1].mesh if mesh_index >= 100000 else self.mesh
         return {'index': mi if mi is not None else -1, 'texture': tex, 'colour': colour, 'vertex_colours': vc,
+                'vertex_colour_scale': 2.0 if owner_mesh.old else 1.0,
                 'occluder': 'OCCLUDE' in name.upper(),
+                'double_sided': 'CAPE' in name.upper(),           # capes are seen from both sides
                 'name': name}
 
     def _vertex_colour(self, mesh_index):
@@ -423,11 +609,44 @@ class Character:
                 out.append((name, f'{path}::{entry}', 30.0, None))
         return out
 
+    def _texture_index(self, ref):
+        tex = self._tex_index.get(ref)
+        if tex is None:
+            tex = self._tex_index[ref] = len(self.textures)
+            self.textures.append(ref)
+        return tex
+
+    def _remap_texture(self, ref):
+        _kind, res, mat = ref
+        rel = res.replace('\\', '/').split('/')
+        if rel[0].lower() == 'chars':
+            rel = rel[1:]
+        index = _model_index(self.chars_dir)
+        path = None
+        for ext in ('_nxg.gsc', '_nxg.ghg'):
+            path = ((_find(self.chars_dir, rel[:-1] + [rel[-1] + ext]) if len(rel) > 1 else None)
+                    or index.get(rel[-1].lower() + ext))
+            if path:
+                break
+        if not path:
+            return -1
+        try:
+            m = model(path)
+        except (ValueError, struct.error, IndexError, OSError):
+            return -1
+        own = m.colour_texture(m.material_by_name(mat))
+        return self._texture_index(own) if own else -1
+
     def has_texture(self, index):
         return 0 <= index < len(self.textures)
 
     def texture_bytes(self, index):
-        with open(self.textures[index], 'rb') as f:
+        ref = self.textures[index]
+        if isinstance(ref, tuple):                     # (file, start, end) inside a model or texture bundle
+            with open(ref[0], 'rb') as f:
+                f.seek(ref[1])
+                return f.read(ref[2] - ref[1])
+        with open(ref, 'rb') as f:
             return f.read()
 
     def texture_format(self, index):

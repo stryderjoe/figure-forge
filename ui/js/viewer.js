@@ -205,6 +205,7 @@ export class Viewer {
                      map: info.mapOverride || this.texture(info.texture), side: THREE.FrontSide };
     if (info.alpha) Object.assign(params, { transparent: true, alphaTest: 0.05, depthWrite: true });
     if (info.vertexColours) params.vertexColors = true;
+    if (info.doubleSided) params.side = THREE.DoubleSide;
     // writes depth only, pulled slightly toward the camera: hides what lies behind it, also pieces in its
     // own plane (LEGO Marvel's teeth sit exactly on it)
     if (info.occluder) Object.assign(params, { colorWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -8 });

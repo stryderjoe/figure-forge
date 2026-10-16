@@ -67,7 +67,9 @@ def material_json(game_id, char, mesh_index):
             'texture': f'/api/texture?char={char.id}&index={tex}' if has else None,
             'alpha': fmt.startswith(('DXT3', 'DXT5', 'A8R8G8B8')),
             'vertexColours': vc,
+            'vertexColourScale': float(m.get('vertex_colour_scale', 2.0)),
             'occluder': bool(m.get('occluder')),
+            'doubleSided': bool(m.get('double_sided')),
             'key': f'{char.id}#{m["index"]}' + (f'@{mesh_index}' if vc else '')}
 
 
@@ -95,8 +97,12 @@ def part_json(game, part_id, base, model_space=False):
         pos, nrm, uv, col, tris, weights = geo
         mat = material_json(game.id, donor, mi)
         # vertex colours (newer era: 128 = full brightness)
-        vcol = (np.clip(np.asarray([c[:3] for c in col], dtype=np.float64) * 2 / 255, 0, 1)
-                if mat.get('vertexColours') and col and len(col) == len(pos) else None)
+        vcol = None
+        if mat.get('vertexColours') and col and len(col) == len(pos):
+            # sRGB bytes (times the game's scale) -> linear, as the viewer's vertex colours are linear
+            srgb = np.clip(np.asarray([c[:3] for c in col], dtype=np.float64) * mat.get('vertexColourScale', 2.0)
+                           / 255, 0, 1)
+            vcol = np.where(srgb <= 0.04045, srgb / 12.92, ((srgb + 0.055) / 1.055) ** 2.4)
         p = np.c_[np.asarray(pos, dtype=np.float64), np.ones(len(pos))] @ placed
         n = np.asarray(nrm, dtype=np.float64) @ placed[:3, :3] if len(nrm) == len(pos) else None
         t = np.asarray(tris, dtype=np.int64)
