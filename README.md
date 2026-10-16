@@ -83,14 +83,14 @@ says which layers the game shows and which animations it uses. Figure Forge:
 | the user interface in headless Microsoft Edge: every step, every export, saving and reopening a project | all passed |
 | exports opened in Blender: GLB, glTF, FBX, `.blend` (one armature, skinned meshes, moving bones); STL, PLY, OBJ | all passed |
 | the Windows build, started as a server | serves the page and the games |
-| a figure put into a copy of LEGO Batman 2's and of LEGO Marvel's GAME.DAT (`tests/check_nxg_export.py`), read back | the body wears it; every other file untouched; Restore gives the archive back |
+| a figure put into copies of LEGO Batman 2's, LEGO Marvel's and LEGO Pirates' GAME.DAT (`tests/check_nxg_export.py`), read back | the body wears it; every other file untouched; Restore gives the archive back |
 
 ## Limits
 
 - Faces do not animate: the games' expression tracks are not read.
-- Figures go into LEGO Batman, Indiana Jones, Star Wars, LEGO Batman 2 and LEGO Marvel Super Heroes (replace
-  a character or add one). Not yet into LEGO Pirates or LEGO Batman 3. The LEGO Batman 2
-  and Marvel exports are checked by reading the archive back; they have not been tried in the running games.
+- Figures go into LEGO Batman, Indiana Jones, Star Wars, LEGO Batman 2, LEGO Marvel Super Heroes and LEGO
+  Pirates (replace a character or add one). Not yet into LEGO Batman 3. The LEGO Batman 2, Marvel and Pirates
+  exports are checked by reading the archive back; they have not been tried in the running games.
 - LEGO Batman 3: Beyond Gotham has its own mode (its files are newer versions of the super-hero era's). Its
   figures, prints, colours, faces, capes and animations are read (and its faces' expression data, which the
   viewer does not use yet for the newer games).

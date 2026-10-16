@@ -474,10 +474,10 @@ function gamePanel() {
   const install = S.installs && S.installs[gid];
   const radio = (key, value, label) => el('label', { class: 'inline', style: 'display:flex;margin:4px 0' },
     el('input', { type: 'radio', name: 'gx-' + key, checked: g[key] === value, onchange: () => { g[key] = value; render(); } }), label);
-  // super-hero era: LEGO Batman 2 and LEGO Marvel take figures; Pirates is not built yet
+  // super-hero era: LEGO Batman 2, Marvel and Pirates take figures; LEGO Batman 3 is not built yet
   const nxg = ['pirates', 'lb2', 'lmsh'].includes(gid);
-  if (nxg && gid === 'pirates') return [el('h3', {}, 'Into the game'),
-    el('p', { class: 'hint' }, `Putting figures into ${S.titles[gid]} is not built yet. LEGO Batman 2, LEGO Marvel Super Heroes and the three classic games can take them.`)];
+  if (gid === 'lb3') return [el('h3', {}, 'Into the game'),
+    el('p', { class: 'hint' }, `Putting figures into ${S.titles[gid]} is not built yet. LEGO Batman 2, LEGO Marvel Super Heroes, LEGO Pirates and the three classic games can take them.`)];
   return [
     el('h3', {}, 'Into the game'),
     el('p', { class: 'hint' }, `Puts the figure into ${S.titles[gid]}, built on ${body ? body.name : 'your body'}'s skeleton, so its abilities and animations come with it. Parts from other games are converted. Close the game first.`),

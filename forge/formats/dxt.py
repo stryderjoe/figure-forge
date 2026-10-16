@@ -127,3 +127,9 @@ def power_of_two_size(width, height):
             p *= 2
         return p
     return side(width), side(height)
+
+
+def encode_dxt1(rgba):
+    """DXT1 (BC1, opaque): the colour half of each DXT5 block."""
+    blocks = np.frombuffer(encode_dxt5(rgba), dtype=np.uint8).reshape(-1, 16)
+    return np.ascontiguousarray(blocks[:, 8:]).tobytes()

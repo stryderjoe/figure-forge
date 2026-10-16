@@ -61,8 +61,8 @@ class NxgWriter:
         with open(self.path, 'rb') as f:
             self.d = f.read()
         self.mesh = nxgmesh.MeshSection(self.d)
-        if self.mesh.version not in (47, 48, 161, 169) or self.mesh.tail != 72:
-            raise WriteError('figures can be put into LEGO Batman 2 and LEGO Marvel Super Heroes only')
+        if not (self.mesh.version in (47, 48, 161, 169) and self.mesh.tail == 72 or self.mesh.pirates):
+            raise WriteError('figures can be put into LEGO Batman 2, LEGO Marvel Super Heroes and LEGO Pirates only')
         self.stem = os.path.basename(self.path)[:-len('_nxg.ghg')]
         comp = self.path[:-len('.ghg')] + '.nxg_textures'
         self.companion = open(comp, 'rb').read() if os.path.exists(comp) else None
@@ -235,16 +235,25 @@ class NxgWriter:
         body_clip = self._body_clip()
         buf = self._template_buffer(body_clip)
         clip_items = self.disp['clips'][body_clip]
+        # the printed front's material (LEGO Pirates lists the back first)
+        mnames = [n.upper() for n in self.model.material_names]
+        fronts = [it for it in clip_items if it[0] < len(mnames) and mnames[it[0]].startswith('BODY_FRONT')]
+        if fronts:
+            clip_items = fronts + [it for it in clip_items if it not in fronts]
         material = clip_items[0][0]
-        tail_part = next(p for p in self.mesh.parts if p['palette'])
+        # the tail of the Body's own part (72 bytes; LEGO Pirates 40)
+        tail_part = self.mesh.parts[self.disp['commands'][clip_items[0][1]][2]]
         tail_at = self._record_end(tail_part)
-        tail = d[tail_at - 72:tail_at]
+        tail = d[tail_at - self.mesh.tail:tail_at]
         # pieces coloured by their vertices (faces, cowls: no image) wear the model's vertex-colour material,
         # the rest the Body material with the atlas
         names = [n.upper() for n in self.model.material_names]
         vc_material = next((i for i, n in enumerate(names) if n.startswith('VERTEXCOLOURS')), material)
         records, new_parts, part_mats = b'', [], []
-        first = len(self.mesh.parts)
+        # LEGO Pirates numbers its full parts first and the depth copies after them: new parts come after the
+        # full ones, and every draw of a depth copy moves up by their number (below)
+        full = sum(1 for p in self.mesh.parts if not p.get('short'))
+        first = full if self.mesh.pirates else len(self.mesh.parts)
         for p in pieces:
             coloured = p['col'] is not None and glb.material(p['material'])[1] is None
             for tris, bones in self.chunks(p):
@@ -275,7 +284,7 @@ class NxgWriter:
                 part_mats.append(vc_material if coloured else material)
         sp.put(self.mesh.end, records, 0)
         count_at = self._part_count_at()
-        sp.put(count_at, struct.pack('>I', first + len(new_parts)))
+        sp.put(count_at, struct.pack('>I', len(self.mesh.parts) + len(new_parts)))
 
         # 3. the texture: an entry in the texture list, its image after the others (in the model, or in its
         # companion)
@@ -303,6 +312,10 @@ class NxgWriter:
             new_cmds += struct.pack('>BBI', 0x83, 0, pairs + j) + struct.pack('>BBI', 0xB3, 0, part)
             items.append(len(cmds) - 1 + 2 * j + 1)
         sp.put(last_at, new_cmds, 0)
+        if self.mesh.pirates:
+            for i, (op, fl, value) in enumerate(cmds):
+                if op == 0xB3 and value >= full:
+                    sp.put(nc_at + 4 + 6 * i + 2, struct.pack('>I', value + len(new_parts)))
         sp.put(nc_at, struct.pack('>I', len(cmds) + 2 * len(new_parts)))
         s0, s1 = self.disp['clip_spans'][body_clip]
         head = d[s0:s0 + 2]
@@ -379,7 +392,7 @@ class NxgWriter:
         while struct.unpack_from('>I', d, at + 4)[0] != self.mesh.version:
             at = d.find(b'HSEM', at + 4)
         if d[at + 8:at + 12] != b'ROTV':
-            raise WriteError('MESH without its count marker')
+            return at + 8                       # LEGO Pirates: the count follows the version
         return at + 12
 
     def _body_specials(self):
@@ -403,6 +416,8 @@ class NxgWriter:
         (LEGO Batman 2), its DDS image after the model's own."""
         d = self.d
         at = d.find(b'HGXT')
+        if at >= 0 and struct.unpack_from('>I', d, at + 4)[0] == 7:
+            return self._add_texture7(sp, atlas, name, entry)
         if at < 0 or d[at + 8:at + 12] != b'ROTV':
             raise WriteError('the model has no texture list')
         m = struct.unpack_from('>I', d, at + 12)[0]
@@ -423,6 +438,44 @@ class NxgWriter:
         if self.companion is None:
             dds, _levels = dds_dxt5_mipped(atlas)
             sp.put(len(d), dds, 0)
+        return n
+
+    def _add_texture7(self, sp, atlas, name, entry):
+        """LEGO Pirates (texture list version 7, no markers): u32 n, n zero words, u32 n, then per texture a
+        16-byte hash, u32 width, u32 height, 0, 0x10000, 1, u32 mip levels, 6, 1, 0, a zero byte, u32 length,
+        the path, 8 zero bytes and u16 its number + 1; its DXT1 image (the format every Pirates texture has)
+        after the model's own."""
+        from .formats import dxt
+        from PIL import Image
+        d = self.d
+        at = d.find(b'HGXT')
+        n = struct.unpack_from('>I', d, at + 8)[0]
+        words_end = at + 12 + 4 * n
+        if struct.unpack_from('>I', d, words_end)[0] != n:
+            raise WriteError('the texture list is not as expected')
+        p = words_end + 4
+        for _ in range(n):
+            ln = struct.unpack_from('>I', d, p + 53)[0]
+            p += 57 + ln + 10
+        side = atlas.shape[0]
+        levels, data, im, s0 = 0, b'', Image.fromarray(atlas), side
+        while True:
+            s1 = max(4, side >> levels)
+            data += dxt.encode_dxt1(np.asarray(im.resize((s1, s1), Image.LANCZOS) if s1 != side else im, np.uint8))
+            levels += 1
+            if s1 <= 4:
+                break
+        head = struct.pack('<4s31I', b'DDS ', 0x7C, 0x81007 | 0x20000, side, side, (side // 4) * (side // 4) * 8, 0,
+                           levels, *([0] * 11), 0x20, 4, int.from_bytes(b'DXT1', 'little'), 0, 0, 0, 0, 0,
+                           0x401008, 0, 0, 0, 0)
+        path = f'figureforge/{name}.nut'.encode('latin1') + b'\0'
+        rec = (entry + struct.pack('>9I', side, side, 0, 0x10000, 1, levels, 6, 1, 0) + b'\0' +
+               struct.pack('>I', len(path)) + path + bytes(8) + struct.pack('>H', n + 1))
+        sp.put(at + 8, struct.pack('>I', n + 1))
+        sp.put(words_end, struct.pack('>I', 0), 0)
+        sp.put(words_end, struct.pack('>I', n + 1), 4)
+        sp.put(p, rec, 0)
+        sp.put(len(d), head + data, 0)
         return n
 
 

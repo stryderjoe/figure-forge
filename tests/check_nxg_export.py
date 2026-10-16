@@ -21,7 +21,8 @@ import urllib.request
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 STEAM = os.path.join('C:' + os.sep, 'Program Files (x86)', 'Steam', 'steamapps', 'common')
-INSTALLS = {'lb2': os.path.join(STEAM, 'LEGO Batman 2'), 'lmsh': os.path.join(STEAM, 'LEGO Marvel Super Heroes')}
+INSTALLS = {'lb2': os.path.join(STEAM, 'LEGO Batman 2'), 'lmsh': os.path.join(STEAM, 'LEGO Marvel Super Heroes'),
+            'pirates': os.path.join(STEAM, 'LEGO\u00ae Pirates of the Caribbean The Video Game')}
 BS = chr(92)
 failures = []
 

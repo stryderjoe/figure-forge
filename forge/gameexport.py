@@ -13,10 +13,11 @@ import shutil
 from . import gamewrite, newchar
 from .formats import classic, datpatch
 
-NXG_EXPORT = {'lb2', 'lmsh'}                    # super-hero era games the figure can be written into
+NXG_EXPORT = {'lb2', 'lmsh', 'pirates'}                    # super-hero era games the figure can be written into
 INSTALL_GUESSES = {
     'lb2': ('LEGO Batman 2',),
     'lmsh': ('LEGO Marvel Super Heroes',),
+    'pirates': ('LEGO\u00ae Pirates of the Caribbean The Video Game', 'LEGO Pirates of the Caribbean The Video Game'),
     'lb1': ('Lego Batman',),
     'indy': ('LEGO Indiana Jones The Original Adventures',),
     'tcs': ('Lego Star Wars Saga',),
@@ -52,7 +53,7 @@ def files_for(game, base_char, glb, mode, name='', report=print):
     (modern.Character in the super-hero era)."""
     if game.id in NXG_EXPORT:
         return nxg_files_for(game, base_char, glb, mode, name, report)
-    if game.id == 'pirates':
+    if game.id == 'lb3':
         raise ExportError(f'putting figures into {game.title} is not built yet')
     txt = classic.character_txt(base_char.path)
     model = gamewrite.write_figure(open(base_char.path, 'rb').read(), glb, game.id, txt, report=report)
@@ -120,7 +121,7 @@ def nxg_files_for(game, base_char, glb, mode, name='', report=print):
 
 
 def nxg_new_character(game, base_char, new, cd):
-    """LEGO Batman 2 / LEGO Marvel: a character is found by the name of its text file, wherever its folder is
+    r"""LEGO Batman 2 / LEGO Marvel / LEGO Pirates: a character is found by the name of its text file, wherever its folder is
     (collection.txt says `collect "IronManClassic"`, the file is minifigs\ironman\ironmanclassic.txt), so a
     new one is chars\minifigs\<new>\<new>.cd and .txt (the base's text: its abilities, sizes and name), a
     `collect` line (no condition: there from the start), and both text files in chars\charstxt.fpk, which the
