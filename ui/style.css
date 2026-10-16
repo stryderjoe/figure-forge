@@ -87,3 +87,22 @@ dialog menu { display: flex; justify-content: flex-end; gap: 8px; padding: 0; }
 details.upload { margin: 4px 0; }
 details.upload summary { cursor: pointer; color: var(--muted); font-size: 12.5px; padding: 4px 0; }
 details.upload[open] { max-height: 40vh; overflow-y: auto; border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; }
+
+/* animation editor */
+.tabs { display: flex; gap: 4px; margin: 0 0 8px; }
+.tabs button { flex: 1; }
+.tabs button.active { background: var(--accent); color: #000; border-color: var(--accent); font-weight: 600; }
+#editbar { position: absolute; left: 12px; right: 12px; bottom: 12px; display: flex; gap: 8px; align-items: center; background: rgba(13,16,21,.9); border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; }
+#editbar[hidden] { display: none; }
+.eb-track { position: relative; flex: 1; height: 28px; display: flex; align-items: center; }
+.eb-track input { width: 100%; position: relative; z-index: 1; }
+#eb-ticks { position: absolute; left: 8px; right: 8px; top: 0; bottom: 0; pointer-events: none; }
+#eb-ticks i { position: absolute; top: 2px; width: 2px; height: 8px; margin-left: -1px; background: #7f8da3; }
+#eb-ticks i.mine { background: var(--accent); height: 12px; width: 3px; }
+#eb-label { color: var(--muted); font-size: 12px; min-width: 170px; }
+.exprs { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; margin: 6px 0; }
+.expr { display: flex; align-items: center; gap: 6px; background: #0f1217; border: 1px solid var(--line); border-radius: 6px; padding: 4px; font-size: 12px; }
+.expr.on { border-color: var(--accent); }
+.expr img { width: 34px; height: 34px; object-fit: cover; border-radius: 4px; background: #222; }
+.expr span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.expr button { padding: 2px 6px; font-size: 11px; }

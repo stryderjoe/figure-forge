@@ -10,6 +10,9 @@ import { PrintEditor } from './prints.js';
 import { LEGO_COLOURS, hexToRgb, rgbToHex } from './palette.js';
 import { FORMATS, exportFigure } from './exporters.js';
 import { Thumbs } from './thumbs.js';
+import { AnimEditor } from './editor.js';
+import { Faces } from './faces.js';
+import { setupAnimUI } from './animui.js';
 
 const $ = s => document.querySelector(s);
 const el = (tag, attrs = {}, ...kids) => {
@@ -33,6 +36,8 @@ const status = text => { $('#status').textContent = text || ''; };
 
 const viewer = new Viewer($('#view'));
 const thumbs = new Thumbs();
+const faces = new Faces(viewer);
+const editor = new AnimEditor(viewer, faces);
 const S = {
   settings: null, ready: [], titles: {}, index: {}, base: null, skeleton: null, parts: [], colours: {},
   customs: [], step: 'body', clipSource: null, clipName: null, slotFilter: 'head', gameFilter: 'all',
@@ -80,6 +85,7 @@ async function setBase(cid, { keepParts = false } = {}) {
   const char = S.index[gid].find(c => c.id === cid);
   const ids = keep || char.parts.filter(p => p.default).map(p => p.id);
   for (const id of ids) await addPart(id, { replace: false });
+  for (const b of S.customBones || []) viewer.addBone(b.name, b.parent, b.offset);
   for (const c of S.customs) await attachCustom(c);
   applyColours();
   viewer.frameFigure();
@@ -277,7 +283,7 @@ PANELS.parts = () => {
 
 function uploadForm() {
   const f = { unit: 'auto', bone: 'head', mode: 'rigid' };
-  const bones = (S.skeleton ? S.skeleton.bones : []).map(b => b.common);
+  const bones = (viewer.bones || []).map(b => b.userData.common);
   const input = el('input', { type: 'file', accept: '.glb,.gltf,.obj,.stl,.fbx,.ldr,.mpd,.dat' });
   return el('div', {},
     el('p', { class: 'hint' }, 'OBJ, glTF/GLB, STL, FBX or LDraw (.ldr / .mpd / .dat; set the LDraw library in Settings for parts by number). Attach it to a bone, or skin it to the nearest bones. Adjust it under Rig.'),
@@ -385,12 +391,13 @@ PANELS.rig = () => {
     el('label', { class: 'inline' }, el('input', { type: 'checkbox', checked: !!viewer.showBones, onchange: e => { viewer.showBones = e.target.checked; viewer.helper.visible = e.target.checked; } }), 'Show bones'),
     S.customs.length ? el('h3', {}, 'Your parts') : null,
     ...S.customs.map(c => customControls(c)),
-    el('h3', {}, 'Skeleton'), el('div', { class: 'tree' }, tree),
+    anim.bonePanel(),
+    el('h3', {}, 'Skeleton'), el('div', { class: 'tree' }, tree + (S.customBones || []).map(b => `\n  + ${b.name}  (yours, on ${b.parent})`).join('')),
   ];
 };
 
 function customControls(c) {
-  const bones = S.skeleton.bones.map(b => b.common);
+  const bones = viewer.bones.map(b => b.userData.common);
   const re = async () => { await attachCustom(c); };
   const slider = (name, key, min, max, step) => el('label', {}, `${name}: ${(+c.t[key]).toFixed(3)}`,
     el('input', { type: 'range', min, max, step, value: c.t[key], class: 'wide', onchange: async e => { c.t[key] = +e.target.value; await re(); render(); } }));
@@ -405,6 +412,14 @@ function customControls(c) {
 
 PANELS.animate = () => {
   if (!S.base) return needBase();
+  const tabs = el('div', { class: 'tabs' },
+    el('button', { class: S.animMode !== 'create' ? 'active' : '', onclick: () => { S.animMode = 'play'; editor.stop(); anim.drawBar(); render(); } }, 'Play classic clips'),
+    el('button', { class: S.animMode === 'create' ? 'active' : '', onclick: () => { S.animMode = 'create'; $('#timeline').hidden = true; editor.start(); anim.drawBar(); render(); } }, 'Create'));
+  if (S.animMode === 'create') return [el('h2', {}, 'Animate'), tabs, ...anim.createPanel()];
+  return [tabs, ...playPanel()];
+};
+
+function playPanel() {
   const src = S.clipSource || S.base;
   const list = el('div', { class: 'list' }, el('div', { class: 'item' }, el('small', {}, 'Loading clips ...')));
   const srcList = el('select', { class: 'wide', onchange: e => { S.clipSource = e.target.value; render(); } },
@@ -426,12 +441,13 @@ PANELS.animate = () => {
     el('input', { type: 'search', placeholder: 'Search clips', value: S.clipSearch || '', oninput: e => { S.clipSearch = e.target.value; render(); } }),
     el('div', { style: 'height:6px' }), list,
   ];
-};
+}
 
 async function playClip(src, name) {
   status(`Loading ${name} ...`);
   const q = `/api/clip?char=${encodeURIComponent(src)}&name=${encodeURIComponent(name)}` + (src !== S.base ? `&target=${encodeURIComponent(S.base)}` : '');
   const data = await api(q);
+  if (editor.active && S.animMode !== 'create') editor.stop();
   viewer.playClip(data);
   S.clipName = name; S.playingSource = src;
   $('#timeline').hidden = false;
@@ -488,25 +504,38 @@ function render() {
 function projectJson() {
   return { app: 'Figure Forge', version: 1, base: S.base, parts: S.parts.map(p => p.id), colours: S.colours,
            prints: prints ? prints.serialise() : {}, customs: S.customs, style: viewer.styleName,
-           clip: S.clipName ? { source: S.playingSource, name: S.clipName } : null };
+           clip: S.clipName ? { source: S.playingSource, name: S.clipName } : null,
+           customBones: S.customBones || [], animations: S.anims || [],
+           editing: editor.active ? editor.serialise() : null, expressions: faces.serialise() };
 }
 
 async function openProject(p) {
   S.customs = p.customs || [];
   S.colours = p.colours || {};
   S.parts = (p.parts || []).map(id => ({ id }));
+  S.customBones = p.customBones || [];
+  S.anims = p.animations || [];
+  faces.clear();
   await setBase(p.base, { keepParts: true });
   if (p.style) { viewer.setStyle(p.style); viewer.restyleAll((key, old) => S.colours[key] || old.userData.info.colour); applyColours(); }
   if (p.prints && Object.keys(p.prints).length) {
     prints = prints || new PrintEditor(el('canvas'), viewer, () => {});
     await prints.restore(p.prints);
   }
-  if (p.clip) await playClip(p.clip.source, p.clip.name);
+  await faces.restore(p.expressions);
+  if (p.editing) { S.animMode = 'create'; editor.load(p.editing); S.step = 'animate'; editor.start(); anim.drawBar(); }
+  else if (p.clip) await playClip(p.clip.source, p.clip.name);
   render();
 }
 
 // -- wiring ----------------------------------------------------------------------------------------------
-for (const b of document.querySelectorAll('#steps button')) b.onclick = () => { S.step = b.dataset.step; render(); };
+for (const b of document.querySelectorAll('#steps button')) b.onclick = () => {
+  const was = S.step;
+  S.step = b.dataset.step;
+  if (was === 'animate' && S.step !== 'animate' && editor.active) { editor.stop(); anim.drawBar(); }
+  if (S.step === 'animate' && S.animMode === 'create' && !editor.active) { editor.start(); anim.drawBar(); }
+  render();
+};
 $('#tl-play').onclick = () => { viewer.playing = !viewer.playing; $('#tl-play').innerHTML = viewer.playing ? '&#10074;&#10074;' : '&#9654;'; };
 $('#tl-stop').onclick = () => { viewer.stop(); $('#timeline').hidden = true; S.clipName = null; status(''); };
 $('#tl-speed').onchange = e => { viewer.speed = +e.target.value; };
@@ -536,7 +565,7 @@ $('#settings-save').onclick = async e => {
   await loadSettings();
   render();
 };
-$('#btn-new').onclick = async () => { S.customs = []; S.colours = {}; prints = null; if (S.base) await setBase(S.base); render(); };
+$('#btn-new').onclick = async () => { S.customs = []; S.colours = {}; prints = null; S.customBones = []; S.anims = []; faces.clear(); editor.stop(); editor.load({}); S.animMode = 'play'; anim.drawBar(); if (S.base) await setBase(S.base); render(); };
 $('#btn-save').onclick = async () => {
   if (!S.base) return;
   await saveFile(`${S.exportName}.forge.json`, new TextEncoder().encode(JSON.stringify(projectJson())));
@@ -545,9 +574,12 @@ $('#btn-save').onclick = async () => {
 $('#btn-open').onclick = () => $('#open-file').click();
 $('#open-file').onchange = async e => { const f = e.target.files[0]; if (f) await openProject(JSON.parse(await f.text())); };
 
-window.FF = { S, viewer, thumbs, setBase, addPart, removePart, playClip, doExport, openProject, projectJson, render,
+window.FF = { S, viewer, thumbs, editor, faces, setBase, addPart, removePart, playClip, doExport, openProject, projectJson, render,
               setColour: (key, rgb) => { S.colours[key] = rgb; applyColours(); }, figureMaterials,
               get prints() { return prints; }, set prints(p) { prints = p; }, PrintEditor, attachCustom };
+
+const anim = setupAnimUI({ el, $, S, viewer, editor, faces, render: () => render(), api, status, playClip: (a, b) => playClip(a, b) });
+window.FF.anim = anim;
 
 (async () => {
   await loadSettings();

@@ -40,6 +40,7 @@ export class Viewer {
     this.styleName = 'classic';
     this.setStyle('classic');
     this.onFrame = null;
+    this.tickers = [];               // functions called every frame with the time step
     const resize = () => {
       const r = canvas.parentElement.getBoundingClientRect();
       this.renderer.setSize(r.width, r.height, false);
@@ -52,6 +53,7 @@ export class Viewer {
       requestAnimationFrame(loop);
       const dt = this.clock.getDelta();
       if (this.mixer && this.playing) this.mixer.update(dt * this.speed);
+      for (const t of this.tickers) t(dt);
       this.controls.update();
       this.renderer.render(this.scene, this.camera);
       if (this.onFrame) this.onFrame();
@@ -123,6 +125,32 @@ export class Viewer {
     this.helper.visible = !!this.showBones;
     this.scene.children.filter(o => o.isSkeletonHelper).forEach(o => this.scene.remove(o));
     this.scene.add(this.helper);
+  }
+
+  // a new bone under `parentName` at `offset` (in the parent's frame); skinned meshes are re-bound to the
+  // grown skeleton with their own bind matrices, so nothing already skinned moves
+  addBone(name, parentName, offset = [0, 0.05, 0]) {
+    if (this.bones.some(b => b.name === name)) return null;
+    this.restPose();
+    const parent = this.bones.find(b => b.name === parentName) || this.bones[0];
+    const bone = new THREE.Bone();
+    bone.name = name;
+    bone.userData.common = name;
+    bone.userData.custom = true;
+    bone.position.fromArray(offset);
+    bone.userData.bind = { p: bone.position.clone(), q: bone.quaternion.clone(), s: bone.scale.clone() };
+    parent.add(bone);
+    this.figure.updateMatrixWorld(true);
+    const inverses = this.skeleton.boneInverses.map(m => m.clone());
+    inverses.push(bone.matrixWorld.clone().invert());
+    this.bones.push(bone);
+    this.skeleton = new THREE.Skeleton(this.bones, inverses);
+    this.figure.traverse(o => { if (o.isSkinnedMesh) o.bind(this.skeleton, o.bindMatrix); });
+    this.scene.children.filter(o => o.isSkeletonHelper).forEach(o => this.scene.remove(o));
+    this.helper = new THREE.SkeletonHelper(this.figure);
+    this.helper.visible = !!this.showBones;
+    this.scene.add(this.helper);
+    return bone;
   }
 
   boneByCommon(common) {
@@ -232,10 +260,16 @@ export class Viewer {
         const pos = g.attributes.position, n = pos.count;
         const si = new Uint16Array(n * 4), sw = new Float32Array(n * 4), v = new THREE.Vector3();
         for (let i = 0; i < n; i++) {
+          // the two nearest joints, weighted by inverse square distance (a vertex on a joint follows it alone)
           v.fromBufferAttribute(pos, i);
-          let best = 0, bd = Infinity;
-          joints.forEach((j, k) => { const d = j.distanceToSquared(v); if (d < bd) { bd = d; best = k; } });
-          si[i * 4] = best; sw[i * 4] = 1;
+          let b1 = 0, d1 = Infinity, b2 = 0, d2 = Infinity;
+          joints.forEach((j, k) => {
+            const d = j.distanceToSquared(v);
+            if (d < d1) { b2 = b1; d2 = d1; b1 = k; d1 = d; } else if (d < d2) { b2 = k; d2 = d; }
+          });
+          const w1 = 1 / Math.max(d1, 1e-10), w2 = d2 < Infinity ? 1 / Math.max(d2, 1e-10) : 0;
+          si[i * 4] = b1; si[i * 4 + 1] = b2;
+          sw[i * 4] = w1 / (w1 + w2); sw[i * 4 + 1] = w2 / (w1 + w2);
         }
         g.setAttribute('skinIndex', new THREE.BufferAttribute(si, 4));
         g.setAttribute('skinWeight', new THREE.BufferAttribute(sw, 4));

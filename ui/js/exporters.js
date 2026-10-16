@@ -20,14 +20,18 @@ export const FORMATS = [
 ];
 
 function gltf(viewer, binary) {
-  // export from the bind pose, so the skin's rest pose is right; the clip carries the motion
+  // export from the bind pose, so the skin's rest pose is right; the clip carries the motion. An editor
+  // animation comes through viewer.exportHook (bone tracks plus face expressions as switched pieces).
   const playing = viewer.action, time = playing ? playing.time : 0;
   if (playing) { viewer.mixer.stopAllAction(); viewer.restPose(); }
+  const hook = viewer.exportHook ? viewer.exportHook() : null;
+  const animations = hook ? hook.animations : viewer.clip ? [viewer.clip.userData.named] : [];
   return new Promise((resolve, reject) => {
     new GLTFExporter().parse(viewer.figure, result => {
+      if (hook) hook.cleanup();
       if (playing) { playing.play(); playing.time = time; viewer.mixer.update(0); }
       resolve(binary ? new Uint8Array(result) : strToU8(JSON.stringify(result, null, 1)));
-    }, reject, { binary, animations: viewer.clip ? [viewer.clip.userData.named] : [], onlyVisible: true });
+    }, e => { if (hook) hook.cleanup(); reject(e); }, { binary, animations, onlyVisible: true });
   });
 }
 

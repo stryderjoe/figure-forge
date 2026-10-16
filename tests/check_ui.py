@@ -257,6 +257,53 @@ def main():
         page.js("FF.viewer.playing = false; FF.S.step = 'rig'; FF.render()")
         time.sleep(0.6)
         page.shot('11_uploads.png')
+
+        # the animation editor on Batman: pose and key an arm, a face expression, a new bone, export
+        page.js("(async () => { FF.S.customs = []; FF.S.customBones = []; FF.prints = null; await FF.setBase('lb1:batman/batman'); "
+                "FF.S.step = 'animate'; FF.S.animMode = 'create'; FF.editor.start(); FF.anim.drawBar(); FF.render(); FF.viewer.frameFigure(); })()")
+        time.sleep(1.0)
+        got = page.js("""(async () => {
+            const E = FF.editor, V = FF.viewer, THREE_q = (b) => b.quaternion.toArray();
+            const arm = V.bones.find(b => b.userData.common === 'r_upperarm');
+            E.select(arm);
+            E.setFrame(0); E.key(arm);
+            E.setFrame(24); arm.rotateZ(1.2); arm.updateMatrixWorld(true); E.key(arm);
+            E.setFrame(12);
+            const mid = arm.quaternion.clone();
+            const restDot = Math.abs(mid.dot(arm.userData.bind.q));
+            // a face expression: the current print, keyed from frame 20
+            const fk = [...FF.faces.sets.keys()][0] || (() => { let k = null; V.figure.traverse(o => { if (!k && o.isMesh && o.userData.slot === 'face' && o.material.map) k = o.userData.materialKey; }); return k; })();
+            const src = FF.faces.snapshot(fk);
+            const idx = await FF.faces.add(fk, 'Wink', src);
+            E.keyFace(fk, idx, 20);
+            E.setFrame(22);
+            const swapped = V.materials.get(fk).map === FF.faces.textureFor(fk, idx);
+            E.setFrame(5);
+            const back = V.materials.get(fk).map === FF.faces.textureFor(fk, 0);
+            // a new bone on the pelvis
+            const before = V.bones.length;
+            const pelvis = V.bones.find(b => b.userData.common === 'pelvis');
+            V.addBone('tail_1', pelvis.name, [0, 0, -0.04]); FF.S.customBones = [{ name: 'tail_1', parent: pelvis.name, offset: [0, 0, -0.04] }];
+            E.buildHandles();
+            E.setFrame(12);
+            return { restDot, keys: E.keyFrames(arm), swapped, back, bones: V.bones.length - before, fk, idx };
+        })()""")
+        check(got['keys'] == [0, 24] and got['restDot'] < 0.9999, f'arm keyed at 0 and 24, turned between them ({got})')
+        check(got['swapped'] and got['back'], 'face expression shows from its key and not before')
+        check(got['bones'] == 1, 'a new bone was added to the skeleton')
+        time.sleep(0.8)
+        page.shot('12_editor.png')
+        page.js("FF.S.exportName = 'editor_figure'")
+        for fmt in ('glb', 'fbx'):
+            err = page.js(f"FF.doExport('{fmt}').then(() => '').catch(e => e.message)")
+            check(not err, f'editor animation exported as {fmt}' + (f': {err}' if err else ''))
+        # a classic clip copied into the editor
+        n = page.js("""(async () => { await FF.playClip('lb1:batman/batman', 'run'); FF.editor.fromViewerClip(2);
+            FF.S.animMode = 'create'; FF.anim.drawBar(); FF.render();
+            return Object.keys(FF.editor.anim.keys).length; })()""")
+        check(n > 20, f'classic run copied into the editor: {n} animated bones')
+        time.sleep(0.6)
+        page.shot('13_editor_from_clip.png')
     finally:
         edge.kill()
         httpd.shutdown()

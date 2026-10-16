@@ -42,6 +42,16 @@
       <label>speed <select id="tl-speed"><option>0.25</option><option>0.5</option><option selected>1</option><option>2</option></select></label>
       <button id="tl-stop" title="Stop and return to the rest pose">&#9632;</button>
     </div>
+    <div id="editbar" hidden>
+      <button id="eb-play" title="Play / pause">&#9654;</button>
+      <button id="eb-prev" title="Previous key">&#9664;&#9664;</button>
+      <div class="eb-track"><input type="range" id="eb-frame" min="0" max="47" value="0"><div id="eb-ticks"></div></div>
+      <button id="eb-next" title="Next key">&#9654;&#9654;</button>
+      <span id="eb-label"></span>
+      <button id="eb-key" title="Key the chosen bone at this frame">Key</button>
+      <button id="eb-keyall" title="Key the whole pose at this frame">Key pose</button>
+      <button id="eb-unkey" title="Remove the chosen bone's key at this frame">Unkey</button>
+    </div>
   </section>
 </main>
 <dialog id="settings">
