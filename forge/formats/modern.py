@@ -471,6 +471,7 @@ class Character:
             first = [x for x in first if not (x['name'].lower().endswith('_nonblended') and
                                               x['name'].lower()[:-len('_nonblended')] in blended)]
             chosen = named or ingame or first or specials[:1]
+            posed_pair = False                  # (bind, idle) worlds of the attachment's own definition, when read
             # a rigid piece of the attachment sits on a joint of its own skeleton: its vertices are in that
             # joint's frame, so the joint's bind position comes first, then the locator
             joint_world, mentioned, skinned_sp = {}, set(), set()
@@ -501,9 +502,14 @@ class Character:
                 if si in joint_world:
                     place = mat_mul(joint_world[si], place)
                 elif si in skinned_sp:
-                    matched = self._match_joint(am, base, mats)
+                    if posed_pair is False:
+                        posed_pair = self._posed_attachment(stem, path)
+                    matched = self._match_joint(am, base, mats, posed_pair[1] if posed_pair else None)
                     if matched is not None:
                         bone, place = matched
+                        if posed_pair:
+                            for mi in mats:
+                                self._bake(mi, *posed_pair)
                 offset = att.get('Object Offset')
                 if isinstance(offset, (bytes, bytearray)) and len(offset) == 64:
                     # the definition's own offset comes first (LEGO Marvel's big figures scale their faces by 1.376)
@@ -534,29 +540,7 @@ class Character:
             return
         sub.id = f'{getattr(self, "id", self.name)}#{stem}'
         sub.common = []
-        # the idle's first frame: local matrices in the model's space, then world matrices
-        world = [list(b['world']) for b in sub.bones]
-        try:
-            clips = anim.clip_list(sub)
-            pick = (next((c for c in clips if c['name'].lower() == 'idle'), None)
-                    or next((c for c in clips if 'idle' in c['name'].lower()), None) or (clips[0] if clips else None))
-            if pick:
-                from . import classic as _classic
-                clip = _classic.load_clip(pick['file'])
-                pose = clip.pose(0)
-                nf = getattr(clip, 'node_flags', None) or []
-                world = []
-                import numpy as np
-                from .. import skeleton as _skel
-                for j, b in enumerate(sub.bones):
-                    if j < len(pose):
-                        m = anim.node_matrix(sub, j, pose[j], nf[j] if j < len(nf) else 0)
-                        local = _skel.mirror(np.asarray(m).reshape(16)).reshape(16).tolist()
-                    else:
-                        local = list(b['bind_local'])
-                    world.append(local if b['parent'] < 0 else mat_mul(local, world[b['parent']]))
-        except (FormatError, ValueError, struct.error, IndexError, OSError, StopIteration):
-            world = [list(b['world']) for b in sub.bones]
+        world = self._idle_world(sub)
         import numpy as np
         skin_m = [np.linalg.inv(np.asarray(b['world'], dtype=np.float64).reshape(4, 4)) @
                   np.asarray(w, dtype=np.float64).reshape(4, 4) for b, w in zip(sub.bones, world)]
@@ -599,7 +583,73 @@ class Character:
                                                        'matrix': list(locators[li]['matrix'])}],
                             'from_layer': att.get('Layer')})
 
-    def _match_joint(self, am, base, mats):
+    @staticmethod
+    def _idle_world(sub):
+        """World matrices of a definition's bones in the first frame of its idle (the bind pose without one)."""
+        from .. import anim
+        world = [list(b['world']) for b in sub.bones]
+        try:
+            clips = anim.clip_list(sub)
+            pick = (next((c for c in clips if c['name'].lower() == 'idle'), None)
+                    or next((c for c in clips if 'idle' in c['name'].lower()), None) or (clips[0] if clips else None))
+            if pick:
+                from . import classic as _classic
+                import numpy as np
+                from .. import skeleton as _skel
+                clip = _classic.load_clip(pick['file'])
+                pose = clip.pose(0)
+                nf = getattr(clip, 'node_flags', None) or []
+                world = []
+                for j, b in enumerate(sub.bones):
+                    if j < len(pose):
+                        m = anim.node_matrix(sub, j, pose[j], nf[j] if j < len(nf) else 0)
+                        local = _skel.mirror(np.asarray(m).reshape(16)).reshape(16).tolist()
+                    else:
+                        local = list(b['bind_local'])
+                    world.append(local if b['parent'] < 0 else mat_mul(local, world[b['parent']]))
+        except (FormatError, ValueError, struct.error, IndexError, OSError, StopIteration):
+            world = [list(b['world']) for b in sub.bones]
+        return world
+
+    def _posed_attachment(self, stem, path):
+        """(bind worlds, idle worlds) of an attachment model that has a definition of the same name with an
+        animation (LEGO Marvel's backpack_venom.cd: its vines hang in its idle), or None."""
+        cd = _cd_index(self.chars_dir).get(stem.lower() + '.cd')
+        if not cd or getattr(self, '_depth', 0) > 1:
+            return None
+        try:
+            sub = Character(cd, self.chars_dir, depth=getattr(self, '_depth', 0) + 1)
+        except (FormatError, ValueError, struct.error, IndexError, OSError):
+            return None
+        if os.path.normcase(os.path.abspath(sub.model_path)) != os.path.normcase(os.path.abspath(path)):
+            return None
+        sub.id = f'{getattr(self, "id", self.name)}#{stem}'
+        sub.common = []
+        posed = self._idle_world(sub)
+        bind = [list(b['world']) for b in sub.bones]
+        return (bind, posed) if posed != bind else None
+
+    def _bake(self, mesh_index, bind, posed):
+        """Fix a skinned piece in a pose: each vertex moved by its bones from bind to posed (model space)."""
+        import numpy as np
+        geo = self.geometry(mesh_index)
+        if geo is None:
+            return
+        pos, nrm, uv, col, tris, skin = geo
+        if not skin:
+            return
+        skin_m = [np.linalg.inv(np.asarray(b, dtype=np.float64).reshape(4, 4)) @
+                  np.asarray(w, dtype=np.float64).reshape(4, 4) for b, w in zip(bind, posed)]
+        out = []
+        for i, v in enumerate(pos):
+            acc = np.zeros(3)
+            for bj, w in skin[i] or [(0, 1.0)]:
+                if bj < len(skin_m):
+                    acc += w * (np.array([v[0], v[1], v[2], 1.0]) @ skin_m[bj])[:3]
+            out.append(tuple(float(x) for x in acc))
+        self._baked[mesh_index] = (out, [], uv, col, tris, None)
+
+    def _match_joint(self, am, base, mats, posed=None):
         """A skinned attachment piece whose skeleton copies the character's joints as '<joint>_match' (LEGO Batman
         3's Killer Croc head, LEGO Marvel's Venom backpack): its vertices are in the character's model space. It
         rides the character joint named by the nearest '_match' joint above its most weighted one: (bone, matrix),
@@ -622,6 +672,8 @@ class Character:
         for jt in joints:
             m = list(jt['bind'])
             worlds.append(m if jt['parent'] is None else mat_mul(m, worlds[jt['parent']]))
+        if posed is not None and len(posed) == len(worlds):
+            worlds = posed                      # the piece is fixed in its idle: the '_match' joint's frame there
         while j is not None and 0 <= j < len(joints):
             name = joints[j]['name'].lower()
             if name.endswith('_match') and name[:-6] in names:
