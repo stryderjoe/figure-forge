@@ -155,8 +155,14 @@ class Model:
         return ('layered', self.bundle[0], colour, mask)
 
     def material_by_name(self, name):
-        names = [n.split(':')[0].lower() for n in self.material_names]
-        return names.index(name.lower()) if name.lower() in names else -1
+        """The material of that name: its full name first (LEGO Batman 3 asks for 'MAT_ARM_LEFT:VARIANT_MANUAL'),
+        else the name before any ':' suffix."""
+        full = [n.lower() for n in self.material_names]
+        if name.lower() in full:
+            return full.index(name.lower())
+        names = [n.split(':')[0] for n in full]
+        want = name.split(':')[0].lower()
+        return names.index(want) if want in names else -1
 
 
 def model(path):
