@@ -45,7 +45,7 @@ def read_all(d):
     at = d.find(b'LOGH')
     while at >= 0:
         try:
-            if struct.unpack_from('>I', d, at + 4)[0] >= 16:
+            if struct.unpack_from('>I', d, at + 4)[0] >= 15:     # LEGO Batman 3: 15 and 16 (28 files are 15)
                 out.append(_parse16(d, at))
             else:
                 out.append(_parse(d, at, nm))
