@@ -8,7 +8,7 @@ import { LDrawLoader } from 'three/addons/loaders/LDrawLoader.js';
 import { Viewer, STYLES } from './viewer.js';
 import { PrintEditor } from './prints.js';
 import { LEGO_COLOURS, hexToRgb, rgbToHex } from './palette.js';
-import { FORMATS, exportFigure } from './exporters.js';
+import { FORMATS, exportFigure, figureGlb } from './exporters.js';
 import { Thumbs } from './thumbs.js';
 import { AnimEditor } from './editor.js';
 import { Faces } from './faces.js';
@@ -54,6 +54,7 @@ async function loadSettings() {
   S.titles = Object.fromEntries(Object.entries(r.games).map(([k, v]) => [k, v.title]));
   S.ready = Object.entries(r.games).filter(([, v]) => v.ready).map(([k]) => k);
   S.blender = r.blender;
+  S.installs = Object.fromEntries(Object.entries(r.games).map(([k, v]) => [k, v.install]));
   for (const gid of S.ready) {
     status(`Indexing ${S.titles[gid]} ...`);
     S.index[gid] = (await api(`/api/characters?game=${gid}`)).characters;
@@ -461,7 +462,63 @@ PANELS.export = () => [
   el('label', {}, 'File name', el('input', { value: S.exportName, oninput: e => { S.exportName = e.target.value.replace(/[^\w\- ]/g, '_') || 'figure'; } })),
   ...FORMATS.map(f => el('div', { class: 'row' }, el('button', { class: 'wide', style: 'width:100%;text-align:left', disabled: f.blender && !S.blender, onclick: () => doExport(f.id) }, f.label))),
   S.lastSaved ? el('p', { class: 'hint ok' }, `Saved: ${S.lastSaved}`) : null,
+  ...gamePanel(),
 ];
+
+function gamePanel() {
+  if (!S.base) return [];
+  const gid = S.base.split(':')[0];
+  const body = (S.index[gid] || []).find(c => c.id === S.base);
+  S.gx = S.gx || { mode: 'replace', name: '', delivery: 'patch' };
+  const g = S.gx;
+  const install = S.installs && S.installs[gid];
+  const radio = (key, value, label) => el('label', { class: 'inline', style: 'display:flex;margin:4px 0' },
+    el('input', { type: 'radio', name: 'gx-' + key, checked: g[key] === value, onchange: () => { g[key] = value; render(); } }), label);
+  return [
+    el('h3', {}, 'Into the game'),
+    el('p', { class: 'hint' }, `Puts the figure into ${S.titles[gid]}, built on ${body ? body.name : 'your body'}'s skeleton, so its abilities and animations come with it. Parts from other games are converted. Close the game first.`),
+    radio('mode', 'replace', `Replace ${body ? body.name : 'the body character'}`),
+    radio('mode', 'new', 'Add as a new character'),
+    g.mode === 'new' ? el('label', {}, 'New character name (letters, digits, _)',
+      el('input', { value: g.name, placeholder: 'my_hero', oninput: e => { g.name = e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, ''); e.target.value = g.name; } })) : null,
+    g.mode === 'new' ? el('p', { class: 'hint' }, "A new character joins the game's character list. A level or cutscene uses it once its text names it; that is not set from here yet.") : null,
+    radio('delivery', 'patch', install ? `Patch the game (backup kept beside GAME.DAT)` : 'Patch the game (install folder not found: set it in Settings)'),
+    radio('delivery', 'mod', 'Make a mod folder (loose files)'),
+    el('div', { class: 'row' },
+      el('button', { class: 'primary', disabled: g.delivery === 'patch' && !install, onclick: () => gameExport() }, 'Put it in the game'),
+      install ? el('button', { title: 'Copy the backup over GAME.DAT, undoing every Figure Forge change', onclick: () => gameRestore(gid) }, 'Restore original') : null),
+    S.gxResult ? el('p', { class: 'hint ' + (S.gxResult.error ? 'bad' : 'ok') }, S.gxResult.text) : null,
+  ];
+}
+
+async function gameExport() {
+  const g = S.gx;
+  S.gxResult = { text: 'Building the figure for the game ...' }; render();
+  try {
+    const glb = await figureGlb(viewer);
+    const q = new URLSearchParams({ base: S.base, mode: g.mode, name: g.name, delivery: g.delivery });
+    const r = await fetch('/api/game-export?' + q, { method: 'POST', body: glb });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || r.statusText);
+    S.gxResult = { text: d.folder ? `Mod folder written: ${d.folder} (${d.files} files; see its README)`
+      : `Done: ${d.replaced} files replaced, ${d.added} added in ${d.archive}. ${(d.notes || []).join(' ')}` };
+  } catch (e) {
+    S.gxResult = { error: true, text: 'Not done: ' + e.message };
+  }
+  render();
+}
+
+async function gameRestore(gid) {
+  try {
+    const r = await fetch('/api/game-restore?game=' + gid, { method: 'POST' });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error);
+    S.gxResult = { text: `Restored ${d.archive} from its backup.` };
+  } catch (e) {
+    S.gxResult = { error: true, text: e.message };
+  }
+  render();
+}
 
 async function doExport(fmt) {
   try {
@@ -552,6 +609,7 @@ $('#btn-settings').onclick = () => {
   for (const g of ['lb1', 'indy', 'tcs']) f.elements[g].value = (S.settings.games || {})[g] || '';
   f.elements.ldraw.value = S.settings.ldraw || '';
   f.elements.blender.value = S.settings.blender || '';
+  for (const g of ['lb1', 'indy', 'tcs']) f.elements['install_' + g].value = (S.settings.installs || {})[g] || S.installs[g] || '';
   $('#settings-msg').textContent = S.blender ? `Blender: ${S.blender}` : 'Blender not found.';
   $('#settings').showModal();
 };
@@ -560,7 +618,8 @@ $('#settings-save').onclick = async e => {
   const f = $('#settings form');
   const games = Object.fromEntries(['lb1', 'indy', 'tcs'].map(g => [g, f.elements[g].value.trim()]));
   const r = await api('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ games, ldraw: f.elements.ldraw.value.trim(), blender: f.elements.blender.value.trim() }) });
+    body: JSON.stringify({ games, ldraw: f.elements.ldraw.value.trim(), blender: f.elements.blender.value.trim(),
+                           installs: Object.fromEntries(['lb1', 'indy', 'tcs'].map(g => [g, f.elements['install_' + g].value.trim()])) }) });
   $('#settings-msg').textContent = `Ready: ${r.ready.map(g => S.titles[g]).join(', ') || 'none'}`;
   await loadSettings();
   render();
@@ -574,7 +633,7 @@ $('#btn-save').onclick = async () => {
 $('#btn-open').onclick = () => $('#open-file').click();
 $('#open-file').onchange = async e => { const f = e.target.files[0]; if (f) await openProject(JSON.parse(await f.text())); };
 
-window.FF = { S, viewer, thumbs, editor, faces, setBase, addPart, removePart, playClip, doExport, openProject, projectJson, render,
+window.FF = { S, viewer, thumbs, editor, faces, gameExport, gameRestore, setBase, addPart, removePart, playClip, doExport, openProject, projectJson, render,
               setColour: (key, rgb) => { S.colours[key] = rgb; applyColours(); }, figureMaterials,
               get prints() { return prints; }, set prints(p) { prints = p; }, PrintEditor, attachCustom };
 

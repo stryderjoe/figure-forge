@@ -162,7 +162,9 @@ class Handler(BaseHTTPRequestHandler):
     def api_get(self, route, q):
         st = STATE
         if route == 'settings':
-            return self.send(200, {'settings': st.cfg, 'games': {gid: {'title': t, 'ready': gid in st.games}
+            from . import gameexport
+            return self.send(200, {'settings': st.cfg, 'games': {gid: {'title': t, 'ready': gid in st.games,
+                                                                 'install': gameexport.find_install(gid, st.cfg)}
                                                                  for gid, t in catalog.GAMES.items()},
                                    'blender': settings.find_blender(st.cfg)})
         if route == 'characters':
@@ -210,17 +212,65 @@ class Handler(BaseHTTPRequestHandler):
                 for key in ('ldraw', 'blender', 'exports'):
                     if key in data:
                         cfg[key] = data[key]
+                for gid, path in (data.get('installs') or {}).items():
+                    if gid in catalog.GAMES:
+                        cfg.setdefault('installs', {})[gid] = path
                 settings.save(cfg)
                 STATE.load()
                 return self.send(200, {'ok': True, 'ready': list(STATE.games)})
             if route == 'convert':
                 return self.convert()
+            if route == 'game-export':
+                return self.game_export(url)
+            if route == 'game-restore':
+                return self.game_restore(url)
             if route == 'save':
                 return self.save_file(parse_qs(url.query).get('name', ['figure'])[0])
             return self.send(404, {'error': 'no such call'})
         except Exception as e:
             traceback.print_exc()
             return self.send(500, {'error': str(e)})
+
+    def game_export(self, url):
+        """The figure (GLB in the body) into its body's game: ?base=&mode=replace|new&name=&delivery=patch|mod"""
+        from . import gameexport
+        q = {k: v[0] for k, v in parse_qs(url.query).items()}
+        n = int(self.headers.get('Content-Length') or 0)
+        glb = self.rfile.read(n)
+        game = STATE.game_of(q['base'])
+        with STATE.lock:
+            base = game.character(q['base'])
+            notes = []
+            try:
+                files = gameexport.files_for(game, base, glb, q.get('mode', 'replace'), q.get('name', ''), notes.append)
+            except (gameexport.ExportError, ValueError) as e:
+                return self.send(400, {'error': str(e)})
+        title = q.get('name') or base.name
+        if q.get('delivery') == 'mod':
+            folder = os.path.join(settings.export_folder(STATE.cfg), 'mods', f'{game.id}_{title}')
+            out = gameexport.mod_folder(folder, files, title, game.title)
+        else:
+            install = gameexport.find_install(game.id, STATE.cfg)
+            if not install:
+                return self.send(400, {'error': f'{game.title} was not found: set its install folder in Settings'})
+            try:
+                out = gameexport.patch(install, files)
+            except PermissionError:
+                return self.send(400, {'error': 'the game folder cannot be written (is the game running, or does '
+                                                'it need administrator rights?)'})
+        out.update(notes=notes, mode=q.get('mode'), character=title)
+        return self.send(200, out)
+
+    def game_restore(self, url):
+        from . import gameexport
+        gid = parse_qs(url.query).get('game', [''])[0]
+        install = gameexport.find_install(gid, STATE.cfg)
+        if not install:
+            return self.send(400, {'error': 'the game was not found'})
+        try:
+            return self.send(200, gameexport.restore(install))
+        except gameexport.ExportError as e:
+            return self.send(400, {'error': str(e)})
 
     def save_file(self, name):
         """Write an export into the export folder (Settings, else Documents/Figure Forge)."""

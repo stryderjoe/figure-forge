@@ -19,6 +19,21 @@ export const FORMATS = [
   { id: 'png', label: 'PNG render', ext: 'png' },
 ];
 
+// the figure as GLB for the game writer: bind pose, no animation, no face-expression pieces
+export async function figureGlb(viewer) {
+  await viewer.whenTexturesReady();
+  const hook = viewer.exportHook;
+  viewer.exportHook = null;
+  const clip = viewer.clip;
+  try {
+    viewer.clip = null;
+    return await gltf(viewer, true);
+  } finally {
+    viewer.exportHook = hook;
+    viewer.clip = clip;
+  }
+}
+
 function gltf(viewer, binary) {
   // export from the bind pose, so the skin's rest pose is right; the clip carries the motion. An editor
   // animation comes through viewer.exportHook (bone tracks plus face expressions as switched pieces).

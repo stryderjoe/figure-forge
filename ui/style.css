@@ -54,7 +54,7 @@ input[type=search], input.wide, select.wide { width: 100%; }
 .mat small { color: var(--muted); display: block; }
 #print-canvas { width: 100%; image-rendering: pixelated; border: 1px solid var(--line); border-radius: 6px; background: #000; cursor: move; touch-action: none; }
 label { display: block; margin: 8px 0 3px; color: var(--muted); font-size: 12.5px; }
-label input:not([type=checkbox]):not([type=range]), label select { display: block; width: 100%; margin-top: 3px; color: var(--text); }
+label input:not([type=checkbox]):not([type=range]):not([type=radio]), label select { display: block; width: 100%; margin-top: 3px; color: var(--text); }
 label.inline { display: inline-flex; gap: 6px; align-items: center; margin: 0; }
 dialog { background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 10px; width: 560px; }
 dialog::backdrop { background: #0009; }
