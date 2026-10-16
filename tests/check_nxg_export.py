@@ -96,6 +96,38 @@ def main(work, glb_path, base):
     if tex:
         ref = ch.textures[tex.pop()]
         check(isinstance(ref, tuple) and ref[2] - ref[1] > 1000, f'the atlas image is found ({os.path.basename(ref[0])})')
+    # a new character beside the others
+    try:
+        r = urllib.request.urlopen(urllib.request.Request(
+            api + f'game-export?base={base}&mode=new&name=ff_test&delivery=patch', data=body, method='POST'), timeout=900)
+        out = json.loads(r.read())
+    except urllib.error.HTTPError as e:
+        out = {'error': e.read().decode()}
+    print(out)
+    check('error' not in out, 'a new character is added')
+    arc = DatArchive(dat)
+    by = {e.path.lower(): e for e in arc.entries}
+    new_cd = BS.join(['chars', 'minifigs', 'ff_test', 'ff_test.cd'])
+    check(new_cd in by and new_cd.replace('.cd', '.txt') in by, 'its definition and text are in the archive')
+    coll = arc.read(by[BS.join(['chars', 'collection.txt'])]).decode('latin1')
+    check('collect "ff_test"' in coll, 'collection.txt names it')
+    from forge.formats import pack
+    names = [n.lower() for n, *_ in pack.read(arc.read(by[BS.join(['chars', 'charstxt.fpk'])]))[0]]
+    check(new_cd.replace('.cd', '.txt') in names, 'charstxt.fpk holds its text')
+    look2 = tempfile.mkdtemp(prefix='ff_nx_look_')
+    for rel in [p for p in by if p.startswith(BS.join(['chars', 'minifigs', 'ff_test'])) or
+                p.startswith(os.path.dirname(model_path.replace(BS, '/')).replace('/', BS) + BS + 'ff')]:
+        dst = os.path.join(look2, *rel.split(BS))
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        with open(dst, 'wb') as f:
+            f.write(arc.read(by[rel]))
+    arc.f.close()
+    try:
+        ch2 = modern.Character(os.path.join(look2, *new_cd.split(BS)), os.path.join(look2, 'chars'))
+        check(len([m for p in ch2.layers[2]['parts'] for m in p['meshes']]) > 0, 'the new character reads, wearing the figure')
+    except Exception as e:
+        check(False, f'the new character reads ({e})')
+    shutil.rmtree(look2, ignore_errors=True)
     r = urllib.request.urlopen(urllib.request.Request(api + f'game-restore?game={gid}', data=b'', method='POST'))
     print(json.loads(r.read()))
     back = {e.path: (e.offset, e.size) for e in DatArchive(dat).entries}

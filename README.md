@@ -88,12 +88,12 @@ says which layers the game shows and which animations it uses. Figure Forge:
 ## Limits
 
 - Faces do not animate: the games' expression tracks are not read.
-- Figures go into LEGO Batman, Indiana Jones and Star Wars (replace a character or add one) and into LEGO
-  Batman 2 and LEGO Marvel Super Heroes (replace a character only). Not yet into LEGO Pirates. The LEGO Batman 2
+- Figures go into LEGO Batman, Indiana Jones, Star Wars, LEGO Batman 2 and LEGO Marvel Super Heroes (replace
+  a character or add one). Not yet into LEGO Pirates or LEGO Batman 3. The LEGO Batman 2
   and Marvel exports are checked by reading the archive back; they have not been tried in the running games.
 - LEGO Batman 3: Beyond Gotham has its own mode (its files are newer versions of the super-hero era's). Its
-  figures, prints, colours, faces, capes and animations are read; its faces' expressions are not, and figures
-  cannot be put into it yet.
+  figures, prints, colours, faces, capes and animations are read (and its faces' expression data, which the
+  viewer does not use yet for the newer games).
 - A part fitted from a very different body (a droid's torso on a minifig) keeps its own shape and may need a
   touch of rigging.
 - An uploaded part that is skinned takes the single nearest bone; it does not blend between bones.

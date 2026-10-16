@@ -474,16 +474,15 @@ function gamePanel() {
   const install = S.installs && S.installs[gid];
   const radio = (key, value, label) => el('label', { class: 'inline', style: 'display:flex;margin:4px 0' },
     el('input', { type: 'radio', name: 'gx-' + key, checked: g[key] === value, onchange: () => { g[key] = value; render(); } }), label);
-  // super-hero era: LEGO Batman 2 and LEGO Marvel take a replaced character; Pirates is not built yet
+  // super-hero era: LEGO Batman 2 and LEGO Marvel take figures; Pirates is not built yet
   const nxg = ['pirates', 'lb2', 'lmsh'].includes(gid);
   if (nxg && gid === 'pirates') return [el('h3', {}, 'Into the game'),
     el('p', { class: 'hint' }, `Putting figures into ${S.titles[gid]} is not built yet. LEGO Batman 2, LEGO Marvel Super Heroes and the three classic games can take them.`)];
-  if (nxg) g.mode = 'replace';
   return [
     el('h3', {}, 'Into the game'),
     el('p', { class: 'hint' }, `Puts the figure into ${S.titles[gid]}, built on ${body ? body.name : 'your body'}'s skeleton, so its abilities and animations come with it. Parts from other games are converted. Close the game first.`),
     radio('mode', 'replace', `Replace ${body ? body.name : 'the body character'}`),
-    nxg ? null : radio('mode', 'new', 'Add as a new character'),
+    radio('mode', 'new', 'Add as a new character'),
     g.mode === 'new' ? el('label', {}, 'New character name (letters, digits, _)',
       el('input', { value: g.name, placeholder: 'my_hero', oninput: e => { g.name = e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, ''); e.target.value = g.name; } })) : null,
     g.mode === 'new' ? el('p', { class: 'hint' }, "A new character joins the game's character list. A level or cutscene uses it once its text names it; that is not set from here yet.") : null,

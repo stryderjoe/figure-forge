@@ -51,7 +51,7 @@ def files_for(game, base_char, glb, mode, name='', report=print):
     """{archive path: bytes} for the figure. game: catalog.Game; base_char: classic.Character of the body
     (modern.Character in the super-hero era)."""
     if game.id in NXG_EXPORT:
-        return nxg_files_for(game, base_char, glb, mode, report)
+        return nxg_files_for(game, base_char, glb, mode, name, report)
     if game.id == 'pirates':
         raise ExportError(f'putting figures into {game.title} is not built yet')
     txt = classic.character_txt(base_char.path)
@@ -73,14 +73,21 @@ def files_for(game, base_char, glb, mode, name='', report=print):
     raise ExportError('mode must be replace or new')
 
 
-def nxg_files_for(game, base_char, glb, mode, report=print):
+def nxg_files_for(game, base_char, glb, mode, name='', report=print):
     """LEGO Batman 2 and LEGO Marvel Super Heroes: the figure as a model of its own beside the shared one, and the
-    body's definition pointed at it (see nxgwrite). Only replacing the body is built."""
+    body's definition pointed at it (see nxgwrite), replacing the body or as a new character."""
     from . import nxgwrite
-    if mode != 'replace':
-        raise ExportError(f'adding a new character to {game.title} is not built yet: replace a character instead')
+    if mode not in ('replace', 'new'):
+        raise ExportError('mode must be replace or new')
+    new = None
+    if mode == 'new':
+        new = (name or '').strip().lower()
+        if not re.fullmatch(r'[a-z0-9_]{2,24}', new):
+            raise ExportError('give the new character a name of 2 to 24 letters, digits or _')
+        if new in {e['name'].lower() for e in game.characters()}:
+            raise ExportError(f'{new} is already a character of this game')
     writer = nxgwrite.NxgWriter(base_char)
-    base = re.sub(r'[^a-z0-9_]', '_', base_char.name.lower())
+    base = new or re.sub(r'[^a-z0-9_]', '_', base_char.name.lower())
     # the new model goes beside the shared one: the games only load models from the folders chars\chardata.txt
     # validates (Super_Minifig is one; a character's own folder is not)
     folder = os.path.dirname(archive_path(game.root, writer.path))
@@ -102,9 +109,40 @@ def nxg_files_for(game, base_char, glb, mode, report=print):
                  f'{folder}{BS}{stem}_nxg.nxg_textures': out['nxg_textures'],
                  f'{folder}{BS}{stem}_nxg.pc_shaders': shaders}
     ref = BS.join(rel + [stem.upper()])
-    files[archive_path(game.root, base_char.path)] = nxgwrite.definition(base_char, ref)
-    report(f'{base_char.name} now wears the figure (model {stem}_nxg.ghg).')
+    cd = nxgwrite.definition(base_char, ref)
+    if new is None:
+        files[archive_path(game.root, base_char.path)] = cd
+        report(f'{base_char.name} now wears the figure (model {stem}_nxg.ghg).')
+        return files
+    files.update(nxg_new_character(game, base_char, new, cd))
+    report(f'{new} joins the character list (from {base_char.name}, model {stem}_nxg.ghg).')
     return files
+
+
+def nxg_new_character(game, base_char, new, cd):
+    """LEGO Batman 2 / LEGO Marvel: a character is found by the name of its text file, wherever its folder is
+    (collection.txt says `collect "IronManClassic"`, the file is minifigs\ironman\ironmanclassic.txt), so a
+    new one is chars\minifigs\<new>\<new>.cd and .txt (the base's text: its abilities, sizes and name), a
+    `collect` line (no condition: there from the start), and both text files in chars\charstxt.fpk, which the
+    game reads its character texts from."""
+    from .formats import pack
+    chars = os.path.join(game.root, 'chars')
+    folder = BS.join(['chars', 'minifigs', new])
+    out = {f'{folder}{BS}{new}.cd': cd}
+    txt_path = base_char.path[:-3] + '.txt'
+    txt = open(txt_path, 'rb').read() if os.path.exists(txt_path) else b''
+    out[f'{folder}{BS}{new}.txt'] = txt
+    with open(os.path.join(chars, 'collection.txt'), 'rb') as f:
+        coll = f.read().rstrip(b'\0')
+    coll = coll.rstrip(b'\r\n') + f'\r\ncollect "{new}"\r\n'.encode('latin1')
+    out[f'chars{BS}collection.txt'] = coll
+    fpk = os.path.join(chars, 'charstxt.fpk')
+    if os.path.exists(fpk):
+        with open(fpk, 'rb') as f:
+            data = f.read()
+        out[f'chars{BS}charstxt.fpk'] = pack.replace(data, {f'chars{BS}collection.txt': coll},
+                                                     add=[(f'{folder}{BS}{new}.txt', 1, txt)])
+    return out
 
 
 def archives(install):

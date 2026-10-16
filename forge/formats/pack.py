@@ -35,8 +35,9 @@ def layout_of(data):
     return ents
 
 
-def write(entries, stamp=0, tail=0x00402F4C, align=1):
-    """entries: [(name, kind, bytes, extra(3 u32))] -> pack bytes. Data follows the names in entry order."""
+def write(entries, stamp=0, tail=0x00402F4C, align=1, gap=0, lead=0):
+    """entries: [(name, kind, bytes, extra(3 u32))] -> pack bytes. Data follows the names in entry order;
+    `lead` zero bytes before the first file, `gap` after each (LEGO Batman 2 and Marvel: 2), then `align`."""
     count = len(entries)
     names = bytearray()
     name_off = []
@@ -45,13 +46,13 @@ def write(entries, stamp=0, tail=0x00402F4C, align=1):
         name_off.append(base + len(names))
         names += name.encode('latin1') + b'\0'
     pos = base + len(names)
-    data = bytearray()
+    data = bytearray(lead)
     data_off = []
     for _name, _kind, blob, _extra in entries:
         pad = (-(pos + len(data))) % align
         data += b'\0' * pad
         data_off.append(pos + len(data))
-        data += blob
+        data += blob + bytes(gap)
     total = pos + len(data)
     out = bytearray(struct.pack('<6I', MAGIC, count, total, stamp, 0, tail))
     for (name, kind, blob, extra), no, do in zip(entries, name_off, data_off):
@@ -64,10 +65,23 @@ def replace(data, changes, add=()):
     """A pack with some files' contents changed ({name: bytes}, names compared ignoring case) and new files
     added ([(name, kind, bytes)]), keeping everything else as it was."""
     entries, stamp, tail = read(data)
+    layout = _layout(data, entries, stamp, tail)
     want = {k.upper(): v for k, v in changes.items()}
     out = [(n, k, want.get(n.upper(), b), x) for n, k, b, x in entries]
     have = {n.upper() for n, *_ in out}
+    # new names follow the pack's own case (upper in LEGO Batman 2008, lower in LEGO Batman 2 and Marvel)
+    upper = not entries or entries[0][0] == entries[0][0].upper()
     for n, k, b in add:
         if n.upper() not in have:
-            out.append((n.upper(), k, b, (0, 0, 0)))
-    return write(out, stamp, tail)
+            out.append((n.upper() if upper else n.lower(), k, b, (0, 0, 0)))
+    return write(out, stamp, tail, **layout)
+
+
+def _layout(data, entries, stamp, tail):
+    """The spacing of an existing pack ({align, gap, lead}) under which it rewrites unchanged, else 4-byte
+    alignment (LEGO Batman 2008's packs)."""
+    for kw in ({'align': 1, 'gap': 2, 'lead': 2}, {'align': 1, 'gap': 2}, {'align': 4}, {'align': 1},
+               {'align': 2}, {'align': 8}, {'align': 16}):
+        if write(entries, stamp, tail, **kw) == data:
+            return kw
+    return {'align': 4}

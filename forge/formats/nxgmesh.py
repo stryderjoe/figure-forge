@@ -117,8 +117,9 @@ class MeshSection:
             # remaining vertices do not move), u32 n, n * u32. Kept as byte ranges; offsets read in morphs().
             part['morphs'] = []
             if self.version == 175 and morphs:
-                # LEGO Batman 3: per target 'ROTV' 0, u32 2, u32 size (of what follows), u32 (not understood), 12
-                # zero bytes, run records ({u32 count, vec3} as the older sparse targets), then 'ROTV' n, n words.
+                # LEGO Batman 3: per target 'ROTV' 0, u32 2, u32 size (of what follows), u32 leading vertices that
+                # stay still, 12 zero bytes, run records ({u32 count, vec3} as the older sparse targets) for the
+                # rest, then 'ROTV' n, n words (not needed).
                 # Where that does not hold, the targets are skipped up to the next part start.
                 read = self._morphs175(c.p, morphs)
                 if read is not None:
@@ -221,7 +222,9 @@ class MeshSection:
                 runs = p + 32
                 if p + 16 + size > len(d) or size % 16 or size < 16:
                     return None
-                out.append((target, 'runs', runs, size - 16))
+                # the word after the size is how many leading vertices stay still; the runs cover the rest
+                still = struct.unpack_from('>I', d, p + 16)[0]
+                out.append((target, 'runs', runs, size - 16, still))
                 p = p + 16 + size
                 if d[p:p + 4] != b'ROTV':
                     return None
@@ -370,8 +373,8 @@ def morph_offsets(section, part_index):
     d, part = section.d, section.parts[part_index]
     n = part['vertex_count']
     out = {}
-    for target, kind, at, size in part.get('morphs', ()):
-        offs = []
+    for target, kind, at, size, *rest in part.get('morphs', ()):
+        offs = [(0.0, 0.0, 0.0)] * rest[0] if rest else []
         if kind == 'dense':
             offs = [struct.unpack_from('>3f', d, at + 12 * i) for i in range(size)]
         else:
