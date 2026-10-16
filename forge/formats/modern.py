@@ -489,7 +489,8 @@ class Character:
                         place = mat_mul(m, place)
                 parts.append({'special': sp['name'], 'kind': 'rigid', 'bone': locators[li]['joint'],
                               'meshes': sorted(mats), 'mats': mats, 'matrix': place})
-            self.layers.append({'index': len(self.layers), 'name': f'TT_{label}', 'chosen': True, 'parts': parts})
+            self.layers.append({'index': len(self.layers), 'name': f'TT_{label}', 'chosen': True, 'parts': parts,
+                                'from_layer': att.get('Layer')})
 
     def _sub_attachment(self, att, stem):
         """An attachment that is a definition (a cape, skinned hair): its visible pieces, skinned to its own
@@ -572,7 +573,8 @@ class Character:
         self.layers.append({'index': len(self.layers), 'name': f'TT_{att.get("Attachment Name") or stem}',
                             'chosen': True, 'parts': [{'special': stem, 'kind': 'rigid', 'bone': locators[li]['joint'],
                                                        'meshes': meshes, 'mats': mats,
-                                                       'matrix': list(locators[li]['matrix'])}]})
+                                                       'matrix': list(locators[li]['matrix'])}],
+                            'from_layer': att.get('Layer')})
 
     def _model(self, override, skeleton):
         if override:

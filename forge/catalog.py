@@ -242,9 +242,15 @@ def parts(char):
     if hasattr(char, 'layer_choice'):
         # newer era: the body layers 0 to 10 and the ones the definition picks; break-ups and suits are left out
         dl = char.default_layers
+        # an attachment shows when the layer it is fastened to does (LEGO Batman 3's Plastic Man: his stretching
+        # head and arms sit on layers his definition does not show)
+        def attached_shown(L):
+            src = L.get('from_layer')
+            return dl is None or not isinstance(src, int) or src in dl
         shown = {L['index'] for L in char.layers
-                 if (L['name'].startswith('TT_') or (L['index'] in dl if dl is not None else
-                                                       (L['chosen'] or L['index'] <= 10)))
+                 if ((L['name'].startswith('TT_') and attached_shown(L)) or
+                     (not L['name'].startswith('TT_') and (L['index'] in dl if dl is not None else
+                                                           (L['chosen'] or L['index'] <= 10))))
                  and not SKIP_LAYER.search(L['name'])}
     else:
         shown = classic.chosen_layers(classic.character_txt(char.path))
