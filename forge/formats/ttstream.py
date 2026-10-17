@@ -130,8 +130,8 @@ class Stream:
                     a, b, c, d = struct.unpack('<IIIi', r.raw(16))
                 else:                              # version 20 (some LEGO Pirates definitions): no fourth word
                     (a, b, c), d = struct.unpack('<III', r.raw(12)), -1
-                if self.version >= 28:
-                    r.raw(4)                       # LEGO Batman 3 (versions 28, 29): one more word per field
+                if self.version >= 27:
+                    r.raw(4)                       # LEGO Batman 3 (versions 27 to 29): one more word per field
                 # a field whose first flag word is 0x8000000N with N = 2 holds an object of class t, inline
                 inline = bool(c & 0x80000000)
                 cls['fields'].append({'type': ('inline', t) if inline else
