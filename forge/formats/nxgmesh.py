@@ -162,13 +162,16 @@ class MeshSection:
                     q += 4
                 if not self._part_start(q):
                     raise MeshError(f'next part not found after {c.p:#x}')
+                part['tail'] = q - c.p
                 c.p = q
             else:
                 c.take(self.tail)
-            # a full record counts one record in LEGO Batman 2, none in LEGO Pirates (measured on shared
-            # buffer references); a short one counts one
+            # a full record counts one record in LEGO Batman 2; in LEGO Pirates (and LB2's MESH 47) only one with
+            # a 72-byte tail, which is every part with facial targets (measured: 12 files whose references needed
+            # the fallback below now resolve with one base, among them the monkey, donkey and monkey cage); a
+            # short one counts one
             # LEGO Batman 3 counts one record more per part (measured on shared buffer references)
-            self.serial += 0 if self.pirates else 2 if self.version == 175 else 1
+            self.serial += (part.get('tail') == 72) if self.pirates else 2 if self.version == 175 else 1
             self.parts.append(part)
         self.end = c.p
         # buffer references count every buffer-like record read; find the base that makes them all fit
