@@ -81,6 +81,28 @@ def read(d, part_count):
         # starts with a named instance
         specials = (_specials(d, q, end, names, clips, commands, part_count) if marked
                     else _specials(d, q - 4, end, names, clips, commands, part_count, need_name=True))
+        if specials is not None and marked and version <= 14:
+            # LEGO Batman 2: a per-clip array of DISP 12-14 can also read as a list of instances. The real list
+            # names real strings: every name starts at a string of the table and none is the table's first entry
+            # ('default_string'); of the lists that do, the last is the one, as the instances follow every other
+            # array (checked against TTGames-Workshop's reader; LEGO Marvel's lists continue after the instances,
+            # so it keeps the first)
+            def real(lst):
+                return names is not None and all(r['name'] != 'default_string' and (r['off'] == 0 or d[names + r['off'] - 1] == 0)
+                                                  for r in lst)
+            found = [specials]
+            later = q + 4
+            while True:
+                later = d.find(b'ROTV', later, end)
+                if later < 0:
+                    break
+                more = _specials(d, later, end, names, clips, commands, part_count)
+                if more is not None:
+                    found.append(more)
+                later += 4
+            good = [lst for lst in found if real(lst)]
+            if good:
+                specials = good[-1]
         if specials is not None:
             return {'version': version, 'commands': commands, 'clips': clips, 'specials': specials,
                     'command_count_at': nc_at, 'clip_spans': spans}
@@ -120,7 +142,7 @@ def _record(d, p, end, names, clips, commands, part_count, i, strict=False):
                     return None
                 parts.append((value, mat))
     return {'name': name, 'matrix': matrix, 'clip': clip, 'flags': flags, 'parts': parts,
-            'size': 204 + 4 * ranges, 'at': p}
+            'size': 204 + 4 * ranges, 'at': p, 'off': off}
 
 
 def _specials(d, q, end, names, clips, commands, part_count, need_name=False):
