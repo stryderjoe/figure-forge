@@ -268,8 +268,11 @@ def material_table(d):
     if a < 0:
         return []
     count = struct.unpack_from('>I', d, a + 8)[0]
-    b = d.find(b'TDML', a)
-    b = len(d) if b < 0 else b
+    # the table ends at TDML (LEGO Marvel, Batman 3) or, in LEGO Batman 2, at the HSCB section after it. LEGO
+    # Pirates' tables (versions 47-56, some shared with LEGO Batman 2) keep the reading tried in the running game.
+    version = struct.unpack_from('>I', d, a + 4)[0]
+    ends = [x for x in (d.find(b'TDML', a), d.find(b'HSCB', a) if version > 56 else -1) if x >= 0]
+    b = min(ends) if ends else len(d)
     starts = [m.start() + a for m in re.finditer(re.escape(bytes([0, 0, 0, 2])), d[a:b])]
 
     pirates = struct.unpack_from('>I', d, a + 4)[0] == 56
@@ -311,7 +314,13 @@ def material_names(d):
 # material version -> where its texture numbers start, measured back from the name: LEGO Marvel 176 / 177 (helmets,
 # material remaps), LEGO Pirates 56 (hair, body and head maps), LEGO Batman 2 132 (body, head and arm templates),
 # LEGO Batman 3 202 (plain parts: lego_white, then alpha; the normal maps sit 24 bytes earlier)
-GAPS = {176: [564], 177: [564], 166: [564], 168: [564], 169: [564], 56: [497], 132: [514], 202: [648]}
+GAPS = {176: [564], 177: [564], 166: [564], 168: [564], 169: [564], 56: [497], 202: [648],
+        # LEGO Batman 2, per material version (TTGames-Workshop's measured texture and name offsets)
+        61: [497], 105: [497], 106: [497], 108: [497], 111: [497],
+        120: [498], 121: [498], 122: [498], 123: [498], 125: [498], 126: [498],
+        127: [514], 128: [514], 129: [514], 130: [514], 132: [514]}
+# LEGO Pirates (56) and LEGO Batman 2's material versions up to 126 hold 16 texture numbers, the rest 18
+SIXTEEN_SLOTS = (56, 61, 105, 106, 108, 111, 120, 121, 122, 123, 125, 126)
 
 
 def texture_slots(d, table, texture_count):
@@ -322,7 +331,7 @@ def texture_slots(d, table, texture_count):
     a = d.find(b'LTMU')
     version = struct.unpack_from('>I', d, a + 4)[0] if a >= 0 else 0
     gaps = GAPS.get(version) or list(range(520, 640, 4))
-    slots = 16 if version == 56 else 18        # LEGO Pirates has 16 (two other numbers follow)
+    slots = 16 if version in SIXTEEN_SLOTS else 18        # LEGO Pirates has 16 (two other numbers follow)
     best = None
     for gap in gaps:
         rows = []
@@ -345,7 +354,7 @@ def texture_slot_gap(d, table, texture_count):
         return None
     a = d.find(b'LTMU')
     version = struct.unpack_from('>I', d, a + 4)[0]
-    slots = 16 if version == 56 else 18
+    slots = 16 if version in SIXTEEN_SLOTS else 18
     gaps = GAPS.get(version) or list(range(520, 640, 4))
     for gap in gaps:
         if all(struct.unpack_from(f'>{slots}i', d, at - gap) + (-1,) * (18 - slots) == tuple(r)
