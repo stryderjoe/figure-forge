@@ -122,9 +122,8 @@ class MeshSection:
             # remaining vertices do not move), u32 n, n * u32. Kept as byte ranges; offsets read in morphs().
             part['morphs'] = []
             if self.version == 175 and morphs:
-                # LEGO Batman 3: per target 'ROTV' 0, u32 2, u32 size (of what follows), u32 leading vertices that
-                # stay still, 12 zero bytes, run records ({u32 count, vec3} as the older sparse targets) for the
-                # rest, then 'ROTV' n, n words (not needed).
+                # LEGO Batman 3: per target 'ROTV' 0, u32 2, u32 size (of what follows), run records ({u32 count,
+                # vec3} as the older sparse targets) filling that size, then 'ROTV' n, n words (not needed).
                 # Where that does not hold, the targets are skipped up to the next part start.
                 read = self._morphs175(c.p, morphs)
                 if read is not None:
@@ -244,12 +243,11 @@ class MeshSection:
                 if d[p:p + 4] != b'ROTV':
                     return None
                 size = struct.unpack_from('>I', d, p + 12)[0]       # counted from after itself
-                runs = p + 32
                 if p + 16 + size > len(d) or size % 16 or size < 16:
                     return None
-                # the word after the size is how many leading vertices stay still; the runs cover the rest
-                still = struct.unpack_from('>I', d, p + 16)[0]
-                out.append((target, 'runs', runs, size - 16, still))
+                # run records ({u32 count, vec3}) fill the size; the first run is not always a still one (its
+                # offset can be set: checked against TTGames-Workshop's target reader)
+                out.append((target, 'runs', p + 16, size))
                 p = p + 16 + size
                 if d[p:p + 4] != b'ROTV':
                     return None
