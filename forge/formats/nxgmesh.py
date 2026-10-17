@@ -78,7 +78,11 @@ class MeshSection:
             raise MeshError('MESH without ROTV')
         count = c.u32()
         self.buffers, self.parts, self.serial, refs = {}, [], 0, []
-        for _ in range(count):
+        # LEGO Pirates: the count is of full records; a full record's depth copy (a short record) follows it
+        # uncounted (measured on super_minifig: 330 full and 318 short records up to 'LTMU')
+        full_seen = 0
+        while full_seen < count or (self.pirates and self.parts and not self.parts[-1].get('short')
+                                    and self._short_at(c.p)):
             part = {'streams': [], 'at': c.p}
             if self.version == 175:
                 part['lead'] = c.u32()          # LEGO Batman 3: one more word before the stream count (1 seen)
@@ -97,6 +101,7 @@ class MeshSection:
                 self.serial += 1
                 self.parts.append(part)
                 continue
+            full_seen += 1
             c.u16()
             part['vertex_count'] = c.u32()
             c.take(4)
@@ -149,7 +154,7 @@ class MeshSection:
                     part['morphs'].append((target, 'runs', at_runs, size))
                     self.serial += bool(n)       # a target with an index list counts one record more
                 self.serial += 2
-            if self.pirates and len(self.parts) + 1 < count:
+            if self.pirates and (full_seen < count or self._short_at(c.p + 40)):
                 # LEGO Pirates: the tail is 40 bytes or longer (not understood); the next part is the first
                 # place after it that reads as a part start
                 q = c.p + 40
@@ -182,6 +187,23 @@ class MeshSection:
         # on super_minifig: only so do the first skeleton's layers land on symmetric pairs of legs, arms and
         # mirrored hands, skinned bodies and rigid hips)
         self.parts = [p for p in self.parts if not p.get('short')] + [p for p in self.parts if p.get('short')]
+
+    def _short_at(self, p):
+        """LEGO Pirates: does a short record (a part's depth copy) start at p? A part start whose word after the
+        streams (zero in a full record) is its vertex count."""
+        if p + 40 > len(self.d) or not self._part_start(p):
+            return False
+        keep_buffers, keep_serial = dict(self.buffers), self.serial
+        try:
+            c = C(self.d, p)
+            for _s in range(_streams(c.u32())):
+                self._buffer(c, 'vertex', [])
+                c.u32()
+            return c.u32() != 0
+        except (MeshError, struct.error):
+            return False
+        finally:
+            self.buffers, self.serial = keep_buffers, keep_serial
 
     def _resolve_by_kind(self, refs):
         """When one base does not fit every reference (LEGO Pirates' and LEGO Batman 3's faces: records counted in

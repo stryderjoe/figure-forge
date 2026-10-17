@@ -241,6 +241,21 @@ class NxgWriter:
         rec += struct.pack('>I', 0)                                             # no morph targets
         return rec + tail
 
+    def _depth_record(self, pos, tris):
+        """LEGO Pirates: the depth copy that follows every full part record (a short record, measured on
+        super_minifig: 318 of its 330 full records have one, all but the faces; without it the game crashed
+        as the model loaded, 2026-10-17): one stream of a position-only vertex buffer (half4: x, y, z, 1),
+        offset 0, the vertex count, an index buffer, first index 0, index count, first vertex 0."""
+        n = len(pos)
+        data = np.asarray(np.c_[pos, np.ones(n)], '>f2').tobytes()
+        idx = np.asarray(tris, '>u2').reshape(-1)
+        rec = struct.pack('>I', 1)
+        rec += struct.pack('>IIII', 1, 2, n, 1) + bytes([0, 6, 0]) + data
+        rec += struct.pack('>II', 0, n)
+        rec += struct.pack('>IIII', 1, 0, len(idx), 2) + idx.tobytes()
+        rec += struct.pack('>III', 0, len(idx), 0)
+        return rec
+
     def write(self, glb_bytes, texture_name='figureforge_atlas', report=print, new_stem=None):
         """{'ghg': the new model, 'nxg_textures': its images (LEGO Marvel) or None}. new_stem: the new model's
         name, as long as the shared model's (LEGO Marvel: the resource header names the companions by it)."""
@@ -277,6 +292,8 @@ class NxgWriter:
         tail_part = self.mesh.parts[self.disp['commands'][clip_items[0][1]][2]]
         tail_at = self._record_end(tail_part)
         tail = d[tail_at - self.mesh.tail:tail_at]
+        if self.mesh.pirates and os.environ.get('FF_PIR_TAIL') is not None:
+            tail = struct.pack('>I', int(os.environ['FF_PIR_TAIL'])) + tail[4:]
         # pieces coloured by their vertices (faces, cowls: no image) wear the model's vertex-colour material,
         # the rest the Body material with the atlas
         names = [n.upper() for n in self.model.material_names]
@@ -319,13 +336,17 @@ class NxgWriter:
                     for j, (b, _x) in enumerate(ws):
                         si[k, j], sw[k, j] = where[b], q[j]
                 verts = self._encode(buf['desc'], buf['stride'], pos, nrm, uv, col, si, sw)
-                records += self._part_record(buf, tail, verts, [[remap[v] for v in t] for t in tris], palette)
+                local = [[remap[v] for v in t] for t in tris]
+                records += self._part_record(buf, tail, verts, local, palette)
+                if self.mesh.pirates:
+                    records += self._depth_record(pos, local)
                 new_parts.append(first + len(new_parts))
                 part_mats.append(vc_material if coloured else material)
                 part_set.append(set_no)
         sp.put(self.mesh.end, records, 0)
         count_at = self._part_count_at()
-        sp.put(count_at, struct.pack('>I', len(self.mesh.parts) + len(new_parts)))
+        # LEGO Pirates counts full records only (each is followed by its uncounted depth copy)
+        sp.put(count_at, struct.pack('>I', (full if self.mesh.pirates else len(self.mesh.parts)) + len(new_parts)))
 
         # 3. the texture: an entry in the texture list, its image after the others (in the model, or in its
         # companion)
@@ -334,9 +355,10 @@ class NxgWriter:
             self.model.material_names
             table = self.model._table
         hgxt = d.find(b'HGXT')
-        if struct.unpack_from('>I', d, hgxt + 4)[0] in (10, 12):
-            # LEGO Batman 2 and LEGO Marvel: a new entry in the texture list crashes the game as the model loads
-            # (2026-10-17, tried in the running games, whatever the image), so the atlas takes the place of the
+        if struct.unpack_from('>I', d, hgxt + 4)[0] in (7, 10, 12):
+            # LEGO Batman 2, LEGO Marvel and LEGO Pirates: a new entry in the texture list crashes the game
+            # (2026-10-17, tried in the running games: LEGO Batman 2 and Marvel as the model loads, Pirates as the
+            # figure comes on screen), so the atlas takes the place of the
             # image the Body material already wears (LEGO Batman 2: the body template, worn by the BODY_FRONT
             # materials only; LEGO Marvel and LEGO Batman 3: the plain template most materials wear, which in
             # the figure's model only the hidden layers share)
@@ -359,11 +381,14 @@ class NxgWriter:
             image = sum(1 for x in paths[:tex_index] if x)
             # the texture keeps its place but gets an id of its own: the game keeps one copy of each texture
             # id it has loaded, and LEGO Marvel drew the shared model's template in place of the atlas
-            entry = os.urandom(16) if os.environ.get('FF_NEW_TEXTURE_ID', '1') == '1' else None
+            entry = os.urandom(16) if self.companion is not None or struct.unpack_from('>I', d, hgxt + 4)[0] == 10 else None
             if entry:
                 sp.put(self._texture_entry_at(d, tex_index, model=True), entry)
             if self.companion is None:
-                self._replace_image(sp, d, struct.unpack_from('>I', d, 0)[0] + 4, atlas, image)
+                if struct.unpack_from('>I', d, hgxt + 4)[0] == 7:
+                    self._replace_image7(sp, atlas, tex_index)
+                else:
+                    self._replace_image(sp, d, struct.unpack_from('>I', d, 0)[0] + 4, atlas, image)
                 companion = None
             else:
                 t = self.companion
@@ -649,6 +674,46 @@ class NxgWriter:
             sp.put(_images_end(d), dds, 0)
         return n
 
+    def _replace_image7(self, sp, atlas, index):
+        """LEGO Pirates: image `index` becomes the atlas as DXT1 (the format every Pirates image has), with
+        every level down to 1 x 1, and its texture entry's width, height and level count follow."""
+        from .formats import dxt
+        from PIL import Image
+        d = self.d
+        side = atlas.shape[0]
+        levels, data, im = 0, b'', Image.fromarray(atlas)
+        while True:
+            s1 = max(1, side >> levels)
+            level = im.resize((max(4, s1), max(4, s1)), Image.LANCZOS) if s1 != side else im
+            data += dxt.encode_dxt1(np.asarray(level, np.uint8))
+            levels += 1
+            if s1 <= 1:
+                break
+        head = struct.pack('<4s31I', b'DDS ', 0x7C, 0xA1007, side, side, (side // 4) * (side // 4) * 8, 0,
+                           levels, *([0] * 11), 0x20, 4, int.from_bytes(b'DXT1', 'little'), 0, 0, 0, 0, 0,
+                           0x401008, 0, 0, 0, 0)
+        p = struct.unpack_from('>I', d, 0)[0] + 4
+        for i in range(index + 1):
+            if d[p:p + 4] != b'DDS ':
+                raise WriteError('the images of the model are not as expected')
+            h, w = struct.unpack_from('<II', d, p + 12)
+            lv = max(1, struct.unpack_from('<I', d, p + 28)[0])
+            size = 128 + sum(max(1, (w >> k) // 4 if (w >> k) >= 4 else 1) *
+                             max(1, (h >> k) // 4 if (h >> k) >= 4 else 1) * 8 for k in range(lv))
+            if i == index:
+                sp.put(p, head + data, size)
+                break
+            p += size
+        # the entry: 16-byte id, u32 width, height, 0, 0x10000, 1, u32 levels, ...
+        at = d.find(b'HGXT')
+        n = struct.unpack_from('>I', d, at + 8)[0]
+        q = at + 12 + 4 * n + 4
+        for _ in range(index):
+            q += 57 + struct.unpack_from('>I', d, q + 53)[0] + 10
+        sp.put(q, os.urandom(16))
+        sp.put(q + 16, struct.pack('>II', side, side))
+        sp.put(q + 36, struct.pack('>I', levels))
+
     def _texture_entry_at(self, d, index, model=True):
         """Where texture entry `index` (its 16-byte id) starts: in the model's 'HGXT' list, or in a
         '.nxg_textures' file's list (after 'CONVDATE')."""
@@ -676,6 +741,14 @@ class NxgWriter:
         d = self.d
         at = d.find(b'HGXT')
         out = []
+        if struct.unpack_from('>I', d, at + 4)[0] == 7:
+            n = struct.unpack_from('>I', d, at + 8)[0]
+            p = at + 12 + 4 * n + 4
+            for _ in range(n):
+                ln = struct.unpack_from('>I', d, p + 53)[0]
+                out.append(d[p + 57:p + 57 + ln].rstrip(b'\0'))
+                p += 57 + ln + 10
+            return out
         if struct.unpack_from('>I', d, at + 4)[0] == 12:
             n, p = struct.unpack_from('>I', d, at + 12)[0], at + 16
             for _ in range(n):
@@ -748,11 +821,14 @@ class NxgWriter:
             p += 57 + ln + 10
         side = atlas.shape[0]
         levels, data, im, s0 = 0, b'', Image.fromarray(atlas), side
+        # every level down to 1 x 1, as the game's own images (a chain that stopped at 4 x 4 crashed the game in
+        # Direct3D as the figure came on screen, 2026-10-17); levels under 4 x 4 are one block each
         while True:
-            s1 = max(4, side >> levels)
-            data += dxt.encode_dxt1(np.asarray(im.resize((s1, s1), Image.LANCZOS) if s1 != side else im, np.uint8))
+            s1 = max(1, side >> levels)
+            level = im.resize((max(4, s1), max(4, s1)), Image.LANCZOS) if s1 != side else im
+            data += dxt.encode_dxt1(np.asarray(level, np.uint8))
             levels += 1
-            if s1 <= 4:
+            if s1 <= 1:
                 break
         head = struct.pack('<4s31I', b'DDS ', 0x7C, 0x81007 | 0x20000, side, side, (side // 4) * (side // 4) * 8, 0,
                            levels, *([0] * 11), 0x20, 4, int.from_bytes(b'DXT1', 'little'), 0, 0, 0, 0, 0,

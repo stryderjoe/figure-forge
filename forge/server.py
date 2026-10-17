@@ -254,7 +254,7 @@ class Handler(BaseHTTPRequestHandler):
             if not install:
                 return self.send(400, {'error': f'{game.title} was not found: set its install folder in Settings'})
             try:
-                out = gameexport.patch(install, files)
+                out = gameexport.patch(install, files, game.root)
             except PermissionError:
                 return self.send(400, {'error': 'the game folder cannot be written (is the game running, or does '
                                                 'it need administrator rights?)'})

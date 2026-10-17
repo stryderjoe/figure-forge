@@ -9,6 +9,7 @@ Delivery:
 import os
 import re
 import shutil
+import struct
 
 from . import gamewrite, newchar
 from .formats import classic, datpatch
@@ -255,12 +256,16 @@ def archives(install):
     return [os.path.join(install, n) for n in names]
 
 
-def patch(install, files):
+def patch(install, files, game_root=None):
     """Each file goes into the archive that already holds it; new files into GAME.DAT. Every archive changed is
-    copied to '<archive>.figureforge-backup' first (once)."""
+    copied to '<archive>.figureforge-backup' first (once). game_root (the extracted game the files were made
+    from): shared lists an earlier export already changed in the archive (packs, collection.txt) are merged
+    rather than replaced, so a second export keeps the first one's entries."""
     dats = archives(install)
     if not dats:
         raise ExportError('no GAME.DAT in the game folder')
+    if game_root:
+        files = merge_shared(install, files, game_root)
     groups = {}
     remaining = dict(files)
     for dat in dats:
@@ -282,6 +287,79 @@ def patch(install, files):
         added += len(a)
     return {'archive': ', '.join(os.path.basename(d) for d in groups) if len(groups) > 1 else dats[0],
             'backup': dats[0] + BACKUP, 'replaced': replaced, 'added': added}
+
+
+def _read_installed(install, rels):
+    """{lower-case archive path: bytes} of the given paths as the installed archives now hold them (the first
+    archive holding a path wins, as patch() writes there)."""
+    from .formats.dat import DatArchive
+    want, got = {r.lower().replace('/', BS) for r in rels}, {}
+    for dat in archives(install):
+        arc = DatArchive(dat)
+        try:
+            for e in arc.entries:
+                k = e.path.lower()
+                if k in want and k not in got:
+                    got[k] = arc.read(e)
+        finally:
+            arc.f.close()
+    return got
+
+
+def merge_shared(install, files, game_root):
+    """files with each shared list (a pack, or a '.txt' list) that the archive already holds in a changed form
+    (an earlier export) merged: the entries this export changed or added against the game's own copy go into
+    the archive's current copy. Other files are returned as they are."""
+    from .formats import pack
+    shared = [k for k in files if k.lower().endswith(('.pac', '.fpk', '.pak', 'collection.txt'))]
+    if not shared:
+        return files
+    now = _read_installed(install, shared)
+    out = dict(files)
+    for k in shared:
+        cur = now.get(k.lower().replace('/', BS))
+        src = os.path.join(game_root, *k.replace('/', BS).split(BS))
+        if cur is None or not os.path.exists(src):
+            continue
+        with open(src, 'rb') as f:
+            orig = f.read()
+        if cur == orig:
+            continue                                    # untouched so far: this export's copy stands
+        mine = files[k]
+        if mine[:4] == struct.pack('<I', pack.MAGIC) and cur[:4] == mine[:4]:
+            out[k] = _merge_pack(cur, orig, mine)
+        elif k.lower().endswith('.txt'):
+            had = set(orig.replace(b'\r', b'').split(b'\n'))
+            have = set(cur.replace(b'\r', b'').split(b'\n'))
+            extra = [ln for ln in mine.replace(b'\r', b'').split(b'\n') if ln.strip() and ln not in had
+                     and ln not in have]
+            out[k] = cur.rstrip(b'\0').rstrip(b'\r\n') + b''.join(b'\r\n' + ln for ln in extra) + b'\r\n'
+    return out
+
+
+def _merge_pack(cur, orig, mine):
+    """The pack cur with the entries mine changed or added against orig: changed ones replaced in place, new
+    ones placed after the entry they follow in mine (or at the end)."""
+    from .formats import pack
+    c_ents, stamp, tail = pack.read(cur)
+    o = {n.lower(): b for n, _k, b, _x in pack.read(orig)[0]}
+    m_ents = pack.read(mine)[0]
+    at = {n.lower(): i for i, (n, *_r) in enumerate(c_ents)}
+    prev = None
+    for n, k, b, x in m_ents:
+        low = n.lower()
+        if low in o and o[low] == b:
+            prev = low
+            continue
+        if low in at:
+            cn, ck, _cb, cx = c_ents[at[low]]
+            c_ents[at[low]] = (cn, ck, b, cx)
+        else:
+            c_ents.insert(at[prev] + 1 if prev in at else len(c_ents), (n, k, b, x))
+            at = {nn.lower(): i for i, (nn, *_r) in enumerate(c_ents)}
+        prev = low
+    layout = pack._layout(cur, pack.read(cur)[0], stamp, tail)
+    return pack.write(c_ents, stamp, tail, **layout)
 
 
 def restore(install):
