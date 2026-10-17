@@ -40,6 +40,14 @@ def _srgb(lin):
     return np.where(lin <= 0.0031308, lin * 12.92, 1.055 * np.power(lin, 1 / 2.4) - 0.055)
 
 
+def _images_end(d):
+    """Where a model's images end: before the 128-byte trailer ('NUS: <dates>' ... 'META') every model of these
+    games ends with (an image added after it crashed LEGO Batman 2 as the model loaded, 2026-10-17)."""
+    if d[-4:] == b'META' and d[-128:-124] == b'NUS:':
+        return len(d) - 128
+    return len(d)
+
+
 class Splices:
     """Byte changes against the original file, applied from the end so earlier positions stay valid."""
 
@@ -264,7 +272,7 @@ class NxgWriter:
         # pieces coloured by their vertices (faces, cowls: no image) wear the model's vertex-colour material,
         # the rest the Body material with the atlas
         names = [n.upper() for n in self.model.material_names]
-        vc_material = next((i for i, n in enumerate(names) if n.startswith('VERTEXCOLOURS')), material)
+        vc_material = self._vertex_colour_material(names, material)
         records, new_parts, part_mats = b'', [], []
         # LEGO Pirates numbers its full parts first and the depth copies after them: new parts come after the
         # full ones, and every draw of a depth copy moves up by their number (below)
@@ -304,19 +312,31 @@ class NxgWriter:
 
         # 3. the texture: an entry in the texture list, its image after the others (in the model, or in its
         # companion)
-        entry = os.urandom(16)
-        tex_index = self._add_texture(sp, atlas, texture_name, entry)
-        companion = self._companion(atlas, texture_name, entry, new_stem) if self.companion else None
-
-        # 4. the Body material wears it
         table = self.model._table if getattr(self.model, '_table', None) is not None else None
         if table is None:
             self.model.material_names
             table = self.model._table
-        gap = modern.texture_slot_gap(d, table, tex_index)
-        if gap is None:
-            raise WriteError('the material table could not be read')
-        sp.put(table[material][1] - gap, struct.pack('>i', tex_index))
+        hgxt = d.find(b'HGXT')
+        if self.companion is None and struct.unpack_from('>I', d, hgxt + 4)[0] == 10:
+            # LEGO Batman 2: a new entry in the texture list crashes the game as the model loads (2026-10-17,
+            # tried in the running game, whatever the image), so the atlas takes the place of the image the
+            # Body material already wears (the 8 x 8 body template, worn by the BODY_FRONT materials only)
+            rows = modern.texture_slots(d, table, struct.unpack_from('>I', d, hgxt + 12)[0])
+            tex_index = rows[material][0] if rows and rows[material] is not None else -1
+            if tex_index < 0:
+                raise WriteError('the Body material wears no image to replace')
+            self._replace_image(sp, atlas, tex_index)
+            companion = None
+        else:
+            entry = os.urandom(16)
+            tex_index = self._add_texture(sp, atlas, texture_name, entry)
+            companion = self._companion(atlas, texture_name, entry, new_stem) if self.companion else None
+
+            # 4. the Body material wears it
+            gap = modern.texture_slot_gap(d, table, tex_index)
+            if gap is None:
+                raise WriteError('the material table could not be read')
+            sp.put(table[material][1] - gap, struct.pack('>i', tex_index))
 
         # 5. draw commands for the new parts, before the list's last command; the Body clip draws them
         cmds = self.disp['commands']
@@ -420,9 +440,29 @@ class NxgWriter:
             return at + 8                       # LEGO Pirates: the count follows the version
         return at + 12
 
+    def _vertex_colour_material(self, names, fallback):
+        """The vertex-colour material ordinary pieces wear (backpacks, ...): LEGO Batman 2 has two, and the
+        first is worn only by the break-up pieces and did not draw on a figure seen close up (2026-10-17)."""
+        vc = [i for i, n in enumerate(names) if n.startswith('VERTEXCOLOURS')]
+        if not vc:
+            return fallback
+        plain = {i: 0 for i in vc}
+        for sp in self.disp['specials']:
+            if any(w in sp['name'].lower() for w in ('breakup', 'skeleton')):
+                continue
+            for _part, mat in sp['parts']:
+                if mat in plain:
+                    plain[mat] += 1
+        return max(vc, key=lambda i: (plain[i], -i))
+
     def _body_specials(self):
+        """The Body layer's pieces, and their copies of the same name further down the list: the shared model
+        has its pieces three times over (levels of detail; LEGO Batman 2 draws a character in play from the
+        far ones, which showed the old torso, 2026-10-17)."""
         layer = self.char.skel['layers'][BODY_LAYER]
-        return sorted({item['special'] for item in layer['items']})
+        own = sorted({item['special'] for item in layer['items']})
+        names = {self.disp['specials'][i]['name'].lower() for i in own}
+        return sorted(set(own) | {i for i, sp in enumerate(self.disp['specials']) if sp['name'].lower() in names})
 
     def _body_clip(self):
         """The clip of the Body layer's plain piece ('Body_Mesh'; not the skeleton or mech variants), whose
@@ -464,8 +504,27 @@ class NxgWriter:
         sp.put(p, entry + struct.pack('>I', len(path)) + path + struct.pack('>I', 0), 0)
         if self.companion is None:
             dds, _levels = dds_dxt5_mipped(atlas)
-            sp.put(len(d), dds, 0)
+            sp.put(_images_end(d), dds, 0)
         return n
+
+    def _replace_image(self, sp, atlas, index):
+        """LEGO Batman 2: the model's images follow its main block back to back, in the texture list's order, each
+        a DDS file (header, then every mip level); image `index` becomes the atlas."""
+        d = self.d
+        p = struct.unpack_from('>I', d, 0)[0] + 4
+        for i in range(index + 1):
+            if d[p:p + 4] != b'DDS ':
+                raise WriteError('the images of the model are not as expected')
+            h, w = struct.unpack_from('<II', d, p + 12)
+            levels = max(1, struct.unpack_from('<I', d, p + 28)[0])
+            block = 8 if d[p + 84:p + 88] == b'DXT1' else 16
+            size = 128 + sum(max(1, (w >> k) // 4 if (w >> k) >= 4 else 1) * max(1, (h >> k) // 4 if (h >> k) >= 4 else 1)
+                             * block for k in range(levels))
+            if i == index:
+                dds, _levels = dds_dxt5_mipped(atlas)
+                sp.put(p, dds, size)
+                return
+            p += size
 
     @staticmethod
     def _entry12(entry, path):
@@ -522,7 +581,7 @@ class NxgWriter:
         sp.put(words_end, struct.pack('>I', 0), 0)
         sp.put(words_end, struct.pack('>I', n + 1), 4)
         sp.put(p, rec, 0)
-        sp.put(len(d), head + data, 0)
+        sp.put(_images_end(d), head + data, 0)
         return n
 
 

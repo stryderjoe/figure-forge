@@ -62,8 +62,12 @@ def main(work, glb_path, base):
         out = {'error': e.read().decode()}
     print(out)
     added = 3 if gid == 'lmsh' else 1                 # LEGO Marvel: the model, its images and its shaders
-    check('error' not in out and out.get('replaced') == 1 and out.get('added') == added,
-          f'one file replaced, {added} added')
+    # LEGO Batman 2 and LEGO Pirates read definitions from charsnimprojects.pac: it changes too
+    pac = BS.join(['chars', 'animprojects.pac'])
+    has_pac = gid in ('lb2', 'pirates')
+    replaced = 2 if has_pac else 1
+    check('error' not in out and out.get('replaced') == replaced and out.get('added') == added,
+          f'{replaced} file(s) replaced, {added} added')
     arc = DatArchive(dat)
     by = {e.path.lower(): e for e in arc.entries}
     char_rel = base.split(':')[1].split('/')
@@ -73,9 +77,14 @@ def main(work, glb_path, base):
     model_path = next((p for p in new if p.endswith('_nxg.ghg')), '')
     stem = os.path.basename(model_path.replace(BS, '/'))[:-len('_nxg.ghg')]
     check(cd_path in by and bool(model_path), f'the definition and the model are in the archive ({model_path})')
-    unchanged = sum(1 for p, v in before.items() if p.lower() != cd_path and p.lower() in by
+    skip = {cd_path, pac} if has_pac else {cd_path}
+    unchanged = sum(1 for p, v in before.items() if p.lower() not in skip and p.lower() in by
                     and (by[p.lower()].offset, by[p.lower()].size) == v)
-    check(unchanged == len(before) - 1, f'every other file untouched ({unchanged} of {len(before) - 1})')
+    check(unchanged == len(before) - len(skip), f'every other file untouched ({unchanged} of {len(before) - len(skip)})')
+    if has_pac:
+        from forge.formats import pack
+        held = {n.lower(): b for n, _k, b, _x in pack.read(arc.read(by[pac]))[0]}
+        check(held.get(cd_path.split(BS, 1)[1]) == arc.read(by[cd_path]), 'animprojects.pac holds the new definition')
     # read the character back from the archive, as the game would find it
     look = tempfile.mkdtemp(prefix='ff_nx_look_')
     for rel in [cd_path] + new:
@@ -122,6 +131,9 @@ def main(work, glb_path, base):
     from forge.formats import pack
     names = [n.lower() for n, *_ in pack.read(arc.read(by[BS.join(['chars', 'charstxt.fpk'])]))[0]]
     check(new_cd.replace('.cd', '.txt') in names, 'charstxt.fpk holds its text')
+    if has_pac:
+        held = {n.lower() for n, *_ in pack.read(arc.read(by[pac]))[0]}
+        check(new_cd.split(BS, 1)[1] in held, 'animprojects.pac holds its definition')
     look2 = tempfile.mkdtemp(prefix='ff_nx_look_')
     for rel in [p for p in by if p.startswith(BS.join(['chars', 'minifigs', 'ff_test'])) or
                 p.startswith(os.path.dirname(model_path.replace(BS, '/')).replace('/', BS) + BS + 'ff')]:

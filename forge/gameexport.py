@@ -121,14 +121,46 @@ def nxg_files_for(game, base_char, glb, mode, name='', report=print):
         files[cd_rel] = cd
         if lb3:
             files.update(lb3_resources(game, files, [f'{folder}{BS}{model_name}', cd_rel]))
+        files.update(anim_projects(game, files, cd_rel))
         report(f'{base_char.name} now wears the figure (model {model_name}).')
         return files
     files.update(nxg_new_character(game, base_char, new, cd))
     if lb3:
         files.update(lb3_resources(game, files, [f'{folder}{BS}{model_name}',
                                                  next(k for k in files if k.lower().endswith(f'{BS}{new}.cd'))]))
+    files.update(anim_projects(game, files, archive_path(game.root, base_char.path)))
     report(f'{new} joins the character list (from {base_char.name}, model {model_name}).')
     return files
+
+
+def anim_projects(game, files, base_rel):
+    """LEGO Batman 2 and LEGO Pirates read every definition (.cd, .cpd, .as) from chars\animprojects.pac, a
+    pack of copies of them, not from the files themselves (found in the running game: a patched batman.cd
+    alone changed nothing). Each definition among files goes into the pack too: in place of its copy, or a
+    new one at the end of the definitions with the base definition's two numbers."""
+    from .formats import pack
+    p = os.path.join(game.root, 'chars', 'animprojects.pac')
+    if not os.path.exists(p):
+        return {}
+    with open(p, 'rb') as f:
+        entries, stamp, tail = pack.read(f.read())
+    at = {n.lower(): i for i, (n, *_r) in enumerate(entries)}
+    like = base_rel.lower().split(BS, 1)[1]
+    extra = entries[at[like]][3] if like in at else (0, 0, 0)
+    for rel, blob in files.items():
+        low = rel.lower()
+        if not low.startswith('chars' + BS) or not low.endswith(('.cd', '.cpd', '.as')):
+            continue
+        name = rel.split(BS, 1)[1]
+        if low.split(BS, 1)[1] in at:
+            n, k, _old, x = entries[at[low.split(BS, 1)[1]]]
+            entries[at[low.split(BS, 1)[1]]] = (n, k, blob, x)
+        else:
+            # the pack keeps its .cd files first: a new one goes after the last of them
+            last = max(i for i, (n, *_r) in enumerate(entries) if n.lower().endswith('.cd'))
+            entries.insert(last + 1, (name, 4, blob, extra))
+            at = {n.lower(): i for i, (n, *_r) in enumerate(entries)}
+    return {f'chars{BS}animprojects.pac': pack.write(entries, stamp, tail, align=4, gap=2)}
 
 
 def lb3_resources(game, files, which):
