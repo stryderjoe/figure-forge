@@ -57,7 +57,7 @@ def read_all(d):
 
 def _parse(d, at, nm):
     (ver, n), p = _rd(d, at + 4, 'II')
-    if ver not in (5, 6, 9, 10) or not 0 < n < 256:
+    if ver not in (5, 6, 8, 9, 10) or not 0 < n < 256:      # 8: LEGO Batman 2's older rigs, the version 9 layout
         raise SkelError(f'skeleton version {ver}')
     joints = []
     for i in range(n):
@@ -93,7 +93,7 @@ def _parse(d, at, nm):
         p += c
     (c,), p = _rd(d, p, 'I')
     meta = []
-    size = 5 if ver >= 9 else 4                  # version 5 / 6 (LEGO Pirates): no layer byte
+    size = 5 if ver >= 8 else 4                  # version 5 / 6 (LEGO Pirates): no layer byte
     for _ in range(c):
         kind, joint = d[p], d[p + 1]
         (special,), _x = _rd(d, p + 2, 'H')
