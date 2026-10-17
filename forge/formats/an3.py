@@ -53,18 +53,49 @@ class An3:
         # (measured on Idle5: key types, curve scales, keys and node flags then meet end to end)
         if self.self_relative or d[:4] == b"ANI9":
             sm, cp, ktp, kp, csf = [v + 36 + 4 * i if v else 0 for i, v in enumerate((sm, cp, ktp, kp, csf))]
-        self.key_types = struct.unpack_from(f"{e}{self.nodes * self.channels}H", d, ktp)
-        # Key slots per 4-frame segment. A type 6 curve takes one u32 slot; a type 7 curve (.an4 only, seen on
-        # rotation channels) takes two. Type 7's second word is NOT decoded: such curves are read from their
-        # first word like type 6, and the block is flagged approximate.
+        raw_types = struct.unpack_from(f"{e}{self.nodes * self.channels}H", d, ktp)
+        # ANI-D / ANI-B (LEGO Batman 2, LEGO Marvel, LEGO Batman 3): bit 15 of a key type marks a stepped curve,
+        # the clip's frame count is at +22 (the header's second count is the number of KEYS) and a frame maps
+        # to key position (frame - first) * ratio; a node's flags switch its channels on (bit 2 translation,
+        # bit 1 rotation, bit 8 the scale channels of 9- and 10-channel blocks); constants are base + type * scale
+        # (header flag 0x20) or a float table after the integer constants. Other blocks read as before.
+        self.modern = d[:4] in (b"ANID", b"ANIB", b"DINA", b"BINA")
+        self.stepped = [bool(kt & 0x8000) for kt in raw_types] if self.modern else [False] * len(raw_types)
+        self.key_types = tuple(kt & 0x7FFF for kt in raw_types) if self.modern else raw_types
+        self.keys = self.frames
+        self.ratio, self.first, self.flags, self.int_constants = 1.0, 0.0, 0, 0
+        if self.modern:
+            self.int_constants, self.flags = d[17], d[19]
+            (self.frames,) = struct.unpack_from(e + "H", d, 22)
+            self.ratio, self.first = struct.unpack_from(e + "ff", d, 72)
+        self.node_flags = list(d[csf:csf + self.nodes]) if csf else []
+        self.active = []
+        for node in range(self.nodes):
+            fl = self.node_flags[node] if node < len(self.node_flags) else 0xFF
+            for ch in range(self.channels):
+                if not self.modern or self.channels == 1:
+                    on = True
+                elif ch < 3:
+                    on = bool(fl & 2)
+                elif ch < 6:
+                    on = bool(fl & 1)
+                elif self.channels in (9, 10) and ch < 9:
+                    on = bool(fl & 8)
+                else:
+                    on = True
+                self.active.append(on)
+        # Key slots per 4-frame segment. A type 6 curve takes one u32 slot; a type 7 curve (.an4 only) takes two:
+        # a 16-bit anchor and three words whose low 12 bits are the blends of the segment's first three frames;
+        # the fourth frame's blend is made of the top 4 bits of those three words.
         self.slots = group // 4
-        self.curve_slot = []
+        self.curve_slot, self.curve_kind = [], []
         slot = 0
-        for kt in self.key_types:
-            if kt in (6, 7):
+        for kt, on in zip(self.key_types, self.active):
+            if kt in (6, 7) and on:
                 self.curve_slot.append(slot)
+                self.curve_kind.append(kt)
                 slot += 2 if kt == 7 else 1
-        self.approximate = 7 in self.key_types
+        self.approximate = 7 in self.key_types and not self.modern
         self.moving = len(self.curve_slot)
         n_const = (ktp - cp) // 2
         self.const_base, self.const_scale = cbase, cscale
@@ -74,40 +105,74 @@ class An3:
             self.segments = ((csf - kp) // 4) // self.slots if csf > kp else (self.frames + 3) // 4 + 1
         else:
             self.segments = 0
-        self.keys = struct.unpack_from(f"{e}{self.slots * self.segments}I", d, kp) if self.slots else ()
-        self.node_flags = list(d[csf:csf + self.nodes]) if csf else []
+        self.key_words = struct.unpack_from(f"{e}{self.slots * self.segments}I", d, kp) if self.slots else ()
+        self.float_pool = cp + ((self.int_constants * 2 + 3) & ~3)
+        self._d, self._e = d, e
+        self._stepped_curves = [st for kt, on, st in zip(self.key_types, self.active, self.stepped) if kt in (6, 7) and on]
         # Key types. Both generations: 6 = animated curve; >= 16 = a constant.
         #   .an3: constant number (type - 16) in the constants table.
-        #   .an4: the type itself carries the quantised value: base + (type - 16) * scale (measured: type - 16
-        #         equals the matching constants-table entry). 14 = fixed at 0 and 15 = fixed at 1 (measured:
-        #         15 appears only on the three scale channels of 9-channel blocks, 14 on translation/rotation).
+        #   ANI-D / ANI-B: see above; 14 = fixed at 0, 15 = fixed at 1.
         allowed = (6, 7, 14, 15) if self.newer else (6,)
         unknown = sorted({v for v in self.key_types if v < 16 and v not in allowed})
         if unknown:
             raise ValueError(f"{path}: unhandled key types {unknown}")
 
-    def curve(self, index, frame):
+    def _word(self, seg, slot, pair=False):
+        at = min(seg, self.segments - 1) * self.slots + slot
+        if not pair:
+            return self.key_words[at]
+        return struct.unpack(self._e + "4H", struct.pack(self._e + "2I", self.key_words[at], self.key_words[at + 1]))
+
+    def curve_at_key(self, index, key):
+        """A curve's value at a whole key position."""
         scale, low = self.curve_params[index]
-        seg = min(frame // 4, self.segments - 1)
-        slot = self.curve_slot[index]
-        key = self.keys[seg * self.slots + slot]
-        a = key & 0xFF
-        nxt = self.keys[min(seg + 1, self.segments - 1) * self.slots + slot] & 0xFF
-        blend = ((key >> (8 + 6 * (frame % 4))) & 63) / 63.0
+        seg, quarter, slot = key // 4, key % 4, self.curve_slot[index]
+        if self.curve_kind[index] == 7 and self.modern:
+            words, after = self._word(seg, slot, True), self._word(seg + 1, slot, True)
+            a, nxt = words[0], after[0]
+            if quarter < 3:
+                blend = (words[1 + quarter] & 0xFFF) / 4095.0
+            else:
+                blend = ((words[1] >> 12) | ((words[2] >> 12) << 4) | ((words[3] >> 12) << 8)) / 4095.0
+        else:
+            word = self._word(seg, slot)
+            a, nxt = word & 0xFF, self._word(seg + 1, slot) & 0xFF
+            blend = ((word >> (8 + 6 * quarter)) & 63) / 63.0
         return low + scale * (a + (nxt - a) * blend)
 
+    def curve(self, index, frame):
+        if not self.modern:
+            return self.curve_at_key(index, frame)
+        pos = max(0.0, min(self.keys - 1.0, (frame - self.first) * self.ratio))
+        whole, frac = int(pos), pos - int(pos)
+        v0 = self.curve_at_key(index, whole)
+        if not frac or self._stepped_curves[index]:
+            return v0
+        return v0 + (self.curve_at_key(index, min(whole + 1, self.keys - 1)) - v0) * frac
+
+    def constant(self, kt):
+        if not self.newer:
+            return self.constants[kt - 16]
+        if not self.modern:
+            return self.const_base + (kt - 16) * self.const_scale       # LEGO Pirates (ANI9), as before
+        if self.flags & 0x20:
+            return self.const_base + kt * self.const_scale
+        return struct.unpack_from(self._e + "f", self._d, self.float_pool + (kt - 16) * 4)[0]
+
     def pose(self, frame):
-        """Per node: (tx, ty, tz, rx, ry, rz[, sx, sy, sz]) at a frame (as many values as the block has channels)."""
+        """Per node: (tx, ty, tz, rx, ry, rz[, sx, sy, sz]) at a frame (as many values as the block has channels).
+        A channel its node switches off reads 0."""
         frame = max(0, min(frame, self.frames - 1))
-        out, curve = [], 0
+        out, curve, i = [], 0, 0
         for node in range(self.nodes):
             values = []
             for ch in range(self.channels):
-                kt = self.key_types[node * self.channels + ch]
-                if kt >= 16:
-                    values.append(self.const_base + (kt - 16) * self.const_scale if self.newer else self.constants[kt - 16])
-                elif kt == 14:
+                kt, on = self.key_types[i], self.active[i]
+                i += 1
+                if not on or kt == 14:
                     values.append(0.0)
+                elif kt >= 16:
+                    values.append(self.constant(kt))
                 elif kt == 15:
                     values.append(1.0)
                 else:
