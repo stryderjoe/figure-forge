@@ -315,6 +315,10 @@ def material_names(d):
 # material remaps), LEGO Pirates 56 (hair, body and head maps), LEGO Batman 2 132 (body, head and arm templates),
 # LEGO Batman 3 202 (plain parts: lego_white, then alpha; the normal maps sit 24 bytes earlier)
 GAPS = {176: [564], 177: [564], 166: [564], 168: [564], 169: [564], 56: [497], 202: [648],
+        # LEGO Marvel and LEGO Batman 3, per material version (measured with TTGames-Workshop's reader over
+        # every chars model: one distance per version)
+        163: [564], 172: [564], 174: [564],
+        187: [672], 191: [672], 194: [672], 195: [672], 196: [672], 198: [672], 199: [644], 200: [644], 201: [644],
         # LEGO Batman 2, per material version (TTGames-Workshop's measured texture and name offsets)
         61: [497], 105: [497], 106: [497], 108: [497], 111: [497],
         120: [498], 121: [498], 122: [498], 123: [498], 125: [498], 126: [498],
