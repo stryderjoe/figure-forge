@@ -87,6 +87,14 @@ class NxgWriter:
         self.disp = nxgdisp.read(self.d, len(self.mesh.parts))
         self.model = modern.model(self.path)
         self.bone_index = {b['name'].lower(): i for i, b in enumerate(char.bones)}
+        # the Hat and Hair bones are driven only while the definition shows a hat or hair layer; the figure's
+        # definition shows the Body layer alone, so pieces on them ride on the Head instead (LEGO Marvel drew an
+        # Iron Man helmet on the Hat bone as a spike up to the sky, 2026-10-17)
+        head = self.bone_index.get('head')
+        if head is not None:
+            for name in ('hat', 'hat1', 'hat2', 'hair'):
+                if name in self.bone_index:
+                    self.bone_index[name] = head
 
     # -- the figure -------------------------------------------------------------------------------------------
 
@@ -273,15 +281,20 @@ class NxgWriter:
         # the rest the Body material with the atlas
         names = [n.upper() for n in self.model.material_names]
         vc_material = self._vertex_colour_material(names, material)
-        records, new_parts, part_mats = b'', [], []
+        # the far copies of the Body number the joints their own way (a shorter list): one set of parts per
+        # numbering, each drawn by a clip of its own
+        tiers = self._lod_tiers(body_clip)
+        records, new_parts, part_mats, part_set = b'', [], [], []
         # LEGO Pirates numbers its full parts first and the depth copies after them: new parts come after the
         # full ones, and every draw of a depth copy moves up by their number (below)
         full = sum(1 for p in self.mesh.parts if not p.get('short'))
         first = full if self.mesh.pirates else len(self.mesh.parts)
         for p in pieces:
             coloured = p['col'] is not None and glb.material(p['material'])[1] is None
-            for tris, bones in self.chunks(p):
-                palette = sorted(bones)
+            for tris, bones, (set_no, jmap) in ((t, b, x) for t, b in self.chunks(p)
+                                               for x in enumerate(tr['map'] for tr in tiers)):
+                to = (lambda b: b) if jmap is None else (lambda b, m=jmap: m[b])
+                palette = sorted({to(b) for b in bones})
                 where = {b: i for i, b in enumerate(palette)}
                 used = sorted({v for t in tris for v in t})
                 remap = {v: i for i, v in enumerate(used)}
@@ -297,7 +310,10 @@ class NxgWriter:
                 si = np.zeros((len(used), 4))
                 sw = np.zeros((len(used), 4))
                 for k, vi in enumerate(used):
-                    ws = p['weights'][vi]
+                    merged = {}
+                    for b, x in p['weights'][vi]:
+                        merged[to(b)] = merged.get(to(b), 0) + x
+                    ws = sorted(merged.items(), key=lambda bx: -bx[1])
                     q = [int(round(x * 255)) for _b, x in ws]
                     q[0] += 255 - sum(q)
                     for j, (b, _x) in enumerate(ws):
@@ -306,6 +322,7 @@ class NxgWriter:
                 records += self._part_record(buf, tail, verts, [[remap[v] for v in t] for t in tris], palette)
                 new_parts.append(first + len(new_parts))
                 part_mats.append(vc_material if coloured else material)
+                part_set.append(set_no)
         sp.put(self.mesh.end, records, 0)
         count_at = self._part_count_at()
         sp.put(count_at, struct.pack('>I', len(self.mesh.parts) + len(new_parts)))
@@ -317,16 +334,46 @@ class NxgWriter:
             self.model.material_names
             table = self.model._table
         hgxt = d.find(b'HGXT')
-        if self.companion is None and struct.unpack_from('>I', d, hgxt + 4)[0] == 10:
-            # LEGO Batman 2: a new entry in the texture list crashes the game as the model loads (2026-10-17,
-            # tried in the running game, whatever the image), so the atlas takes the place of the image the
-            # Body material already wears (the 8 x 8 body template, worn by the BODY_FRONT materials only)
-            rows = modern.texture_slots(d, table, struct.unpack_from('>I', d, hgxt + 12)[0])
+        if struct.unpack_from('>I', d, hgxt + 4)[0] in (10, 12):
+            # LEGO Batman 2 and LEGO Marvel: a new entry in the texture list crashes the game as the model loads
+            # (2026-10-17, tried in the running games, whatever the image), so the atlas takes the place of the
+            # image the Body material already wears (LEGO Batman 2: the body template, worn by the BODY_FRONT
+            # materials only; LEGO Marvel and LEGO Batman 3: the plain template most materials wear, which in
+            # the figure's model only the hidden layers share)
+            paths = self._texture_paths()
+            rows = modern.texture_slots(d, table, len(paths))
             tex_index = rows[material][0] if rows and rows[material] is not None else -1
-            if tex_index < 0:
+            if tex_index < 0 or not paths[tex_index]:
                 raise WriteError('the Body material wears no image to replace')
-            self._replace_image(sp, atlas, tex_index)
-            companion = None
+            # LEGO Marvel's Body material wears its colour map in slot 6 too (a normal or shine map): there the
+            # atlas drew the figure as streaked metal, so that slot is emptied (2026-10-17, in the running game;
+            # pointing the material at another texture instead crashed it)
+            others = [k for k, x in enumerate(rows[material]) if k and x == tex_index]
+            if others:
+                gap = modern.texture_slot_gap(d, table, len(paths))
+                if gap is None:
+                    raise WriteError('the material table could not be read')
+                for k in others:
+                    sp.put(table[material][1] - gap + 4 * k, struct.pack('>i', -1))
+            # entries without a path have no image (LEGO Marvel's last two)
+            image = sum(1 for x in paths[:tex_index] if x)
+            # the texture keeps its place but gets an id of its own: the game keeps one copy of each texture
+            # id it has loaded, and LEGO Marvel drew the shared model's template in place of the atlas
+            entry = os.urandom(16) if os.environ.get('FF_NEW_TEXTURE_ID', '1') == '1' else None
+            if entry:
+                sp.put(self._texture_entry_at(d, tex_index, model=True), entry)
+            if self.companion is None:
+                self._replace_image(sp, d, struct.unpack_from('>I', d, 0)[0] + 4, atlas, image)
+                companion = None
+            else:
+                t = self.companion
+                csp = Splices(t)
+                if entry:
+                    csp.put(self._texture_entry_at(t, tex_index, model=False), entry)
+                self._replace_image(csp, t, t.find(b'DDS '), atlas, image)
+                if new_stem:
+                    self._rename(csp, t, new_stem, [(0, struct.unpack_from('>I', t, 0)[0] + 4)])
+                companion = csp.apply()
         else:
             entry = os.urandom(16)
             tex_index = self._add_texture(sp, atlas, texture_name, entry)
@@ -353,19 +400,22 @@ class NxgWriter:
                 if op == 0xB3 and value >= full:
                     sp.put(nc_at + 4 + 6 * i + 2, struct.pack('>I', value + len(new_parts)))
         sp.put(nc_at, struct.pack('>I', len(cmds) + 2 * len(new_parts)))
-        s0, s1 = self.disp['clip_spans'][body_clip]
-        if self.disp['version'] >= 32:
-            pairs32 = [x for it, m in zip(items, part_mats) for x in (it, m)]
-            clip = struct.pack('>H', len(items)) + struct.pack(f'>{len(pairs32)}I', *pairs32)
-        else:
-            head = d[s0:s0 + 2]
-            clip = head + struct.pack('>I', len(items)) + struct.pack(f'>{len(items)}I', *part_mats)
-            clip += struct.pack('>I', len(items)) + struct.pack(f'>{len(items)}I', *items)
-        sp.put(s0, clip, s1 - s0)
-        # every piece of the Body layer draws that clip
-        for sp_index in self._body_specials():
-            rec = self.disp['specials'][sp_index]
-            sp.put(rec.get('clip_at', rec['at'] + 180), struct.pack('>I', body_clip))
+        for set_no, tier in enumerate(tiers):
+            mine = [k for k, x in enumerate(part_set) if x == set_no]
+            its, mats = [items[k] for k in mine], [part_mats[k] for k in mine]
+            s0, s1 = self.disp['clip_spans'][tier['clip']]
+            if self.disp['version'] >= 32:
+                pairs32 = [x for it, m in zip(its, mats) for x in (it, m)]
+                clip = struct.pack('>H', len(its)) + struct.pack(f'>{len(pairs32)}I', *pairs32)
+            else:
+                head = d[s0:s0 + 2]
+                clip = head + struct.pack('>I', len(its)) + struct.pack(f'>{len(its)}I', *mats)
+                clip += struct.pack('>I', len(its)) + struct.pack(f'>{len(its)}I', *its)
+            sp.put(s0, clip, s1 - s0)
+            # every piece of the Body layer in this numbering draws that clip
+            for sp_index in tier['specials']:
+                rec = self.disp['specials'][sp_index]
+                sp.put(rec.get('clip_at', rec['at'] + 180), struct.pack('>I', tier['clip']))
 
         # 6. the main block's length word; the new name in the resource header and the display list's path
         q = d.find(b'02UN')
@@ -373,7 +423,9 @@ class NxgWriter:
         sp.put(q - 8, struct.pack('>I', nu + sp.growth_before(q - 4 + nu)))
         if new_stem:
             self._rename(sp, d, new_stem, [(0, q - 8), self._disp_path()])
-        report(f'{len(new_parts)} parts, a {side} x {side} texture')
+        report(f'{len(new_parts) // len(tiers)} parts'
+               + (f' (and a copy for each of {len(tiers) - 1} far levels of detail)' if len(tiers) > 1 else '')
+               + f', a {side} x {side} texture')
         return {'ghg': sp.apply(), 'nxg_textures': companion}
 
     def _disp_path(self):
@@ -455,6 +507,96 @@ class NxgWriter:
                     plain[mat] += 1
         return max(vc, key=lambda i: (plain[i], -i))
 
+    def _lod_tiers(self, body_clip):
+        """[{'specials', 'clip', 'map'}]: the Body pieces grouped by how their level of detail numbers the
+        joints. The model holds every piece several times over (the n-th piece of a name is level n); the far
+        levels skin to a shorter joint list (the full list in order, with joints left out: fingers, weapons,
+        capes ...), which the files do not spell out, so it is worked out from the model itself: each far
+        level's joints are matched to the near level's by where the vertices they carry sit (same piece name),
+        keeping the matches that run in order. map: full joint -> that level's number (a joint the level leaves
+        out rides on its nearest kept ancestor); None for the full numbering (drawn by body_clip)."""
+        sps = self.disp['specials']
+        seen, level = {}, {}
+        for i, sp in enumerate(sps):
+            level[i] = seen.get(sp['name'], 0)
+            seen[sp['name']] = level[i] + 1
+        body = self._body_specials()
+        out = [{'specials': [i for i in body if level[i] == 0], 'clip': body_clip, 'map': None}]
+        for lv in sorted({level[i] for i in body} - {0}):
+            specials = [i for i in body if level[i] == lv]
+            jmap = self._joint_map(lv, level)
+            if jmap is None:
+                out[0]['specials'] += specials
+                continue
+            clips = [sps[i]['clip'] for i in specials if sps[i]['clip'] not in (0xFFFFFFFF, body_clip)]
+            if not clips:
+                out[0]['specials'] += specials
+                continue
+            out.append({'specials': specials, 'clip': clips[0], 'map': jmap})
+        return out
+
+    def _joint_map(self, lv, level):
+        """Level lv's joint numbering (see _lod_tiers): {full joint: its number}, or None when it is the full
+        numbering."""
+        sps = self.disp['specials']
+        cache = getattr(self, '_centroid_cache', None)
+        if cache is None:
+            cache = self._centroid_cache = {}
+
+        def centroids(si):
+            if si not in cache:
+                acc = {}
+                for part, _m in sps[si]['parts']:
+                    pos, _n, _uv, _c, _t, skin = self.mesh.geometry(part)
+                    for p, ws in zip(pos, skin or ()):
+                        for b, x in ws:
+                            if x > 0.5:
+                                a = acc.setdefault(b, [np.zeros(3), 0.0])
+                                a[0] += np.asarray(p, dtype=np.float64) * x
+                                a[1] += x
+                cache[si] = {b: v[0] / v[1] for b, v in acc.items() if v[1] > 0}
+            return cache[si]
+
+        near = {sp['name']: i for i, sp in enumerate(sps) if level[i] == 0}
+        votes = {}
+        for si, sp in enumerate(sps):
+            if level[si] != lv or sp['name'] not in near or not sp['parts']:
+                continue
+            ref = centroids(near[sp['name']])
+            if not ref:
+                continue
+            for raw, cen in centroids(si).items():
+                best = min(ref, key=lambda fb: np.linalg.norm(ref[fb] - cen))
+                if np.linalg.norm(ref[best] - cen) < 0.02:
+                    v = votes.setdefault(raw, {})
+                    v[best] = v.get(best, 0) + 1
+        pairs = sorted((raw, max(v, key=v.get)) for raw, v in votes.items())
+        if not pairs:
+            return None
+        # the matches that run in order (longest increasing run of full joints)
+        best_len, prev = [1] * len(pairs), [-1] * len(pairs)
+        for i in range(len(pairs)):
+            for j in range(i):
+                if pairs[j][1] < pairs[i][1] and best_len[j] + 1 > best_len[i]:
+                    best_len[i], prev[i] = best_len[j] + 1, j
+        k = max(range(len(pairs)), key=lambda i: best_len[i])
+        chain = []
+        while k >= 0:
+            chain.append(pairs[k])
+            k = prev[k]
+        anchors = {full: raw for raw, full in chain}
+        if sum(1 for full, raw in anchors.items() if full == raw) >= 0.9 * len(anchors):
+            return None
+        out = {}
+        bones = self.char.bones
+        for j in range(len(bones)):
+            k = j
+            while k is not None and k >= 0 and k not in anchors:
+                parent = bones[k].get('parent')
+                k = parent if isinstance(parent, int) and parent != k else None
+            out[j] = anchors.get(k, 0) if k is not None and k >= 0 else 0
+        return out
+
     def _body_specials(self):
         """The Body layer's pieces, and their copies of the same name further down the list: the shared model
         has its pieces three times over (levels of detail; LEGO Batman 2 draws a character in play from the
@@ -507,11 +649,52 @@ class NxgWriter:
             sp.put(_images_end(d), dds, 0)
         return n
 
-    def _replace_image(self, sp, atlas, index):
-        """LEGO Batman 2: the model's images follow its main block back to back, in the texture list's order, each
-        a DDS file (header, then every mip level); image `index` becomes the atlas."""
+    def _texture_entry_at(self, d, index, model=True):
+        """Where texture entry `index` (its 16-byte id) starts: in the model's 'HGXT' list, or in a
+        '.nxg_textures' file's list (after 'CONVDATE')."""
+        v12 = self.lb3
+        if model:
+            at = d.find(b'HGXT')
+            if struct.unpack_from('>I', d, at + 4)[0] == 12:
+                p = at + 16
+            else:
+                m = struct.unpack_from('>I', d, at + 12)[0]
+                p = at + 16 + 4 * m + 8
+        else:
+            p = d.find(b'ROTV', d.find(b'CONVDATE')) + 8
+        for _ in range(index):
+            if v12:
+                p += 22 + d[p + 20]
+            else:
+                p += 20 + struct.unpack_from('>I', d, p + 16)[0] + 4
+        return p
+
+    def _texture_paths(self):
+        """The source path of each texture in the model's list (b'' for an empty entry). 'HGXT' 10: a count of
+        words (LEGO Batman 2: one per texture; LEGO Marvel: none), 'ROTV', the count, then {16-byte id, u32
+        length, path, u32}; 12: 'ROTV', the count, then {16-byte id, u32, u8 length, path, u8}."""
         d = self.d
-        p = struct.unpack_from('>I', d, 0)[0] + 4
+        at = d.find(b'HGXT')
+        out = []
+        if struct.unpack_from('>I', d, at + 4)[0] == 12:
+            n, p = struct.unpack_from('>I', d, at + 12)[0], at + 16
+            for _ in range(n):
+                out.append(d[p + 21:p + 20 + d[p + 20]].rstrip(b'\0'))
+                p += 22 + d[p + 20]
+            return out
+        m = struct.unpack_from('>I', d, at + 12)[0]
+        we = at + 16 + 4 * m
+        n, p = struct.unpack_from('>I', d, we + 4)[0], we + 8
+        for _ in range(n):
+            ln = struct.unpack_from('>I', d, p + 16)[0]
+            out.append(d[p + 20:p + 20 + ln].rstrip(b'\0'))
+            p += 20 + ln + 4
+        return out
+
+    def _replace_image(self, sp, d, p, atlas, index):
+        """The images (in the model after its main block: LEGO Batman 2; in its '.nxg_textures' after the list:
+        LEGO Marvel, LEGO Batman 3) follow one another in the texture list's order, each a DDS file (header,
+        then every mip level); image `index` becomes the atlas."""
         for i in range(index + 1):
             if d[p:p + 4] != b'DDS ':
                 raise WriteError('the images of the model are not as expected')
