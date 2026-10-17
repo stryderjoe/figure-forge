@@ -311,7 +311,7 @@ def material_names(d):
 # material version -> where its texture numbers start, measured back from the name: LEGO Marvel 176 / 177 (helmets,
 # material remaps), LEGO Pirates 56 (hair, body and head maps), LEGO Batman 2 132 (body, head and arm templates),
 # LEGO Batman 3 202 (plain parts: lego_white, then alpha; the normal maps sit 24 bytes earlier)
-GAPS = {176: [564], 177: [564], 56: [497], 132: [514], 202: [648]}
+GAPS = {176: [564], 177: [564], 166: [564], 168: [564], 169: [564], 56: [497], 132: [514], 202: [648]}
 
 
 def texture_slots(d, table, texture_count):
