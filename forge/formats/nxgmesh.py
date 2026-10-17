@@ -129,13 +129,13 @@ class MeshSection:
                 read = self._morphs175(c.p, morphs)
                 if read is not None:
                     part['morphs'], c.p = read
-                    self.serial += 3 * len(morphs)
+                    self.serial += 2 * len(morphs)
                     c.take(self.tail)
                     self.parts.append(part)
                     continue
                 q = self._next_part175(c.p)
                 c.p = q if q is not None else self._mesh_end175(c.p)
-                self.serial += 3 * len(morphs)
+                self.serial += 2 * len(morphs)
                 part['skipped_morphs'] = len(morphs)
                 self.parts.append(part)
                 continue
