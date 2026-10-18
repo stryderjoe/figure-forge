@@ -165,10 +165,19 @@ def classic_new_files(root, rel, base_icon, new, picture, report=print):
     loads stuff\icons\batman_icons_all.gsc) with an icon of the new character's own."""
     folder = find(root, 'stuff', 'icons')
     out = {}
+    new_icon = classic_new_icon(base_icon, new)
     for fn in sorted(os.listdir(folder)) if folder else []:
         if fn.lower().endswith('_icons_all_pc.gsc'):
             p = os.path.join(folder, fn)
-            out[rel(p)] = add_icon(_read(p), base_icon, classic_new_icon(base_icon, new), picture)
+            out[rel(p)] = add_icon(_read(p), base_icon, new_icon, picture)
+    # the scene the game loads a character's portrait from in play is named after its icon (icon_Batman is in
+    # icon_batman_pc.gsc, Luke_hoth_icon in LUKE_HOTH_ICON_PC.GSC; seen in the running LEGO Batman: an icon only
+    # in the scene of every icon left the new character's portrait empty): a copy of the base's, with the new icon
+    own = find(root, 'stuff', 'icons', f'{base_icon}_pc.gsc')
+    if own:
+        name = f'{new_icon}_pc.gsc'
+        name = name.upper() if os.path.basename(own).isupper() else name.lower()
+        out[BS.join([*rel(own).split(BS)[:-1], name])] = renamed_scene(_read(own), base_icon, new_icon, picture)
     if not out:
         report('no icon scene was found for the new character')
     return out
@@ -844,3 +853,31 @@ def gsc_merge(cur, orig, mine):
         pic = decode(_object_image(s_m, o))
         out = bytearray(add_icon(bytes(out), base['name'], name, pic))
     return bytes(out)
+
+
+def renamed_scene(data, base_name, new_name, picture):
+    """A copy of a classic character's own icon scene for a new character: the base's icon objects (X and X1)
+    renamed for the new character and their image showing the picture. Nothing else of the scene changes (the
+    new names are added at the end of its description; adding whole objects to this scene made LEGO Batman
+    crash as the portrait came on screen, 2026-10-17)."""
+    from .formats.nu20edit import ModelFile
+    scene = _scene(data)
+    m = ModelFile(data)
+    low = base_name.lower()
+    objects = m.ptr(scene.disp + 0x70)
+    texs = set()
+    for o in scene.special_objects:
+        if o['name'].lower() in (low, low + '1') and o['model'] >= 0:
+            at = objects + 0xD0 * o['index']
+            name = new_name + o['name'][len(base_name):]
+            s = m.alloc(len(name) + 1, align=1)
+            m.write(s, name.encode('latin1') + b'\0')
+            m.set_ptr(at + 0xB4, s)
+            for mi in scene.models[o['model']]['materials']:
+                if scene.materials[mi]['texture'] >= 0:
+                    texs.add(scene.materials[mi]['texture'])
+    if not texs:
+        raise ValueError(f'no icon {base_name} in the scene')
+    for t in texs:
+        m.textures[t][1] = restamp(m.textures[t][1], picture)
+    return m.tobytes()
