@@ -115,8 +115,9 @@ def main(work, glb_path, base='lb3:adamwest/adamwest'):
 
     out = call(api, f'game-export?base={base}&mode=replace&delivery=patch', body)
     print(out)
-    check('error' not in out and out.get('replaced') == 2 and out.get('added') == 4,
-          'two files replaced (the definition and its .res), four added (model, images, shaders, model .res)')
+    check('error' not in out and out.get('replaced') == 4 and out.get('added') == 4,
+          'four files replaced (the definition and its .res, the portrait and the sheet of portraits), four added '
+          '(model, images, shaders, model .res)')
     after = everything(inst)
     new = sorted(p for p in after if p not in before)
     changed = sorted(p for p in before if after.get(p) != before[p])
@@ -124,7 +125,10 @@ def main(work, glb_path, base='lb3:adamwest/adamwest'):
     folder, name = base.split(':')[1].split('/')
     cd_rel = BS.join(['chars', 'minifig', folder, name + '.cd'])
     model_rel = next((p for p in new if p.endswith('_dx11.ghg')), '')
-    check(sorted(changed) == sorted([cd_rel, cd_rel + '.res']), 'only the definition and its .res changed')
+    sheet = BS.join(['icons', 'characters', 'charactericontpage_dx11.tsh'])
+    icon = next((p for p in changed if p.startswith(BS.join(['icons', 'characters', ''])) and p.endswith('_dx11.tex')), '')
+    check(sorted(changed) == sorted([cd_rel, cd_rel + '.res', sheet, icon]) and icon,
+          f'only the definition and its .res, the portrait ({icon}) and the sheet changed')
     stem = os.path.basename(model_rel.replace(BS, '/'))[:-len('_dx11.ghg')]
     check(bool(model_rel) and {model_rel + '.res', model_rel[:-4] + '.nxg_textures',
                                model_rel[:-4] + '.pc_shaders'} <= set(new), f'the model and its companions ({model_rel})')
@@ -165,6 +169,12 @@ def main(work, glb_path, base='lb3:adamwest/adamwest'):
     coll = files2.get(BS.join(['chars', 'collection.txt']), b'').decode('latin1')
     check('collect "ff_test"' in coll, 'collection.txt names it')
     check(check_res(files2, games['lb3'], new_cd), 'its .res is the one the build would write')
+    from forge import gameportrait
+    check(BS.join(['icons', 'characters', 'ff_test_dx11.tex']) in after2, 'it has a portrait of its own')
+    sheet_now = read_files(inst, [sheet])[sheet]
+    check(gameportrait.fnv1_upper('ff_test') in gameportrait.tsh_squares(sheet_now)[0], 'the sheet has a square for it')
+    proj = read_files(inst, [BS.join(['chars', 'black_minifig.cpj'])])[BS.join(['chars', 'black_minifig.cpj'])]
+    check(b'ff_test' in proj, 'the character project lists it')
     look2 = tempfile.mkdtemp(prefix='ff_lb3_look_')
     unpack(look2, files2)
     try:

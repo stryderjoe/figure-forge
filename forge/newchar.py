@@ -47,6 +47,12 @@ def build(game_root, base_model_path, new_name, model_bytes, upper=False, unlock
     out[rel(folder, case(f'{new}_lr_pc.ghg'))] = model_bytes
     txt_path = classic.character_txt(base_model_path)
     txt = _read(txt_path) if txt_path else b''
+    # its own portrait: the icon line names the icon Figure Forge adds to the icon scene (gameportrait)
+    from .gameportrait import ICON_LINE, classic_new_icon
+    m = ICON_LINE.search(txt.decode('latin1'))
+    if m:
+        t = txt.decode('latin1')
+        txt = (t[:m.start(2)] + classic_new_icon(m.group(2), new) + t[m.end(2):]).encode('latin1')
     out[rel(folder, case(f'{new}.txt'))] = txt
 
     # animations: the base's own files, and its pack with the folder renamed inside

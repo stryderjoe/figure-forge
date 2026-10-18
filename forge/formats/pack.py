@@ -35,9 +35,10 @@ def layout_of(data):
     return ents
 
 
-def write(entries, stamp=0, tail=0x00402F4C, align=1, gap=0, lead=0):
+def write(entries, stamp=0, tail=0x00402F4C, align=1, gap=0, lead=0, shared=False):
     """entries: [(name, kind, bytes, extra(3 u32))] -> pack bytes. Data follows the names in entry order;
-    `lead` zero bytes before the first file, `gap` after each (LEGO Batman 2 and Marvel: 2), then `align`."""
+    `lead` zero bytes before the first file, `gap` after each (LEGO Batman 2 and Marvel: 2), then `align`.
+    shared: entries with the same bytes point at one copy of them (every entry has its own offset and size)."""
     count = len(entries)
     names = bytearray()
     name_off = []
@@ -48,10 +49,15 @@ def write(entries, stamp=0, tail=0x00402F4C, align=1, gap=0, lead=0):
     pos = base + len(names)
     data = bytearray(lead)
     data_off = []
+    stored = {}
     for _name, _kind, blob, _extra in entries:
+        if shared and blob in stored:
+            data_off.append(stored[blob])
+            continue
         pad = (-(pos + len(data))) % align
         data += b'\0' * pad
         data_off.append(pos + len(data))
+        stored[blob] = data_off[-1]
         data += blob + bytes(gap)
     total = pos + len(data)
     out = bytearray(struct.pack('<6I', MAGIC, count, total, stamp, 0, tail))
@@ -61,26 +67,53 @@ def write(entries, stamp=0, tail=0x00402F4C, align=1, gap=0, lead=0):
     return bytes(out)
 
 
-def replace(data, changes, add=()):
+def is_shared(data):
+    """True when two entries of the pack point at the same data."""
+    count = struct.unpack_from('<I', data, 4)[0]
+    offs = [struct.unpack_from('<I', data, 0x18 + 28 * i + 4)[0] for i in range(count)]
+    return len(set(offs)) < len(offs)
+
+
+def replace(data, changes, add=(), shared=None):
     """A pack with some files' contents changed ({name: bytes}, names compared ignoring case) and new files
-    added ([(name, kind, bytes)]), keeping everything else as it was."""
+    added ([(name, kind, bytes[, extra])]), keeping everything else as it was."""
     entries, stamp, tail = read(data)
     layout = _layout(data, entries, stamp, tail)
     want = {k.upper(): v for k, v in changes.items()}
     out = [(n, k, want.get(n.upper(), b), x) for n, k, b, x in entries]
     have = {n.upper() for n, *_ in out}
-    # new names follow the pack's own case (upper in LEGO Batman 2008, lower in LEGO Batman 2 and Marvel)
-    upper = not entries or entries[0][0] == entries[0][0].upper()
-    for n, k, b in add:
+    # new names follow the pack's own case (upper in LEGO Batman 2008, lower in LEGO Batman 2 and Marvel); a pack
+    # of mixed case (LEGO Pirates: chars\MiniFigs\WillTurner\WillTurner.txt) keeps them as given
+    names = [n for n, *_r in entries]
+    upper = not entries or all(n == n.upper() for n in names)
+    lower = bool(entries) and all(n == n.lower() for n in names)
+    # a pack whose names are in order is searched by halves (LEGO Pirates' icons_tex.pak: a portrait added at the
+    # end kept the new character out of the game, 2026-10-17): new names go where the order puts them
+    in_order = names == sorted(names)
+    for n, k, b, *x in add:
         if n.upper() not in have:
-            out.append((n.upper() if upper else n.lower(), k, b, (0, 0, 0)))
-    return write(out, stamp, tail, **layout)
+            entry = (n.upper() if upper else n.lower() if lower else n, k, b, tuple(x[0]) if x else (0, 0, 0))
+            if in_order:
+                insert_sorted(out, entry)
+            else:
+                out.append(entry)
+    if shared is None:
+        shared = is_shared(data)
+    return write(out, stamp, tail, shared=shared, **layout)
+
+
+def insert_sorted(entries, entry):
+    """Put entry among entries (in order of their names) where its name belongs."""
+    import bisect
+    at = bisect.bisect([e[0] for e in entries], entry[0])
+    entries.insert(at, entry)
 
 
 def _layout(data, entries, stamp, tail):
     """The spacing of an existing pack ({align, gap, lead}) under which it rewrites unchanged, else 4-byte
     alignment (LEGO Batman 2008's packs)."""
-    for kw in ({'align': 1, 'gap': 2, 'lead': 2}, {'align': 1, 'gap': 2}, {'align': 4}, {'align': 1},
+    # (align 4 with gap 2: the newer games' icons_tex.pak and animprojects.pac)
+    for kw in ({'align': 1, 'gap': 2, 'lead': 2}, {'align': 1, 'gap': 2}, {'align': 4, 'gap': 2}, {'align': 4}, {'align': 1},
                {'align': 2}, {'align': 8}, {'align': 16}):
         if write(entries, stamp, tail, **kw) == data:
             return kw

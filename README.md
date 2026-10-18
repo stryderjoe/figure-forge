@@ -101,8 +101,15 @@ says which layers the game shows and which animations it uses. Figure Forge:
   its build writes them, checked on all 4563 of the game's own). Replacing a character has been tried in
   the running games: the figure shows, animates and plays in each one's first level (LEGO Batman 2 as
   Batman, Marvel as Iron Man, Pirates as Will Turner, LEGO Batman 3 as Batman). In these games the figure
-  takes the place of the body template image rather than adding a texture, and the character's portrait
-  in the corner stays the original. Adding a new character has not been tried in these four.
+  takes the place of the body template image rather than adding a texture.
+- **Portraits:** every export draws the figure's portrait (the head, front on, as the games draw theirs) and
+  puts it where each game keeps its portraits: the classic games' icon scenes, the newer games' icon images
+  and packs, Marvel's page of portraits and LEGO Batman 3's sheet. A new character gets a portrait of its
+  own in every game but LEGO Pirates, which leaves a new character out of the game when it has one (its new
+  characters go without). Seen in the running games: LEGO Batman 2 (replace and new) and Pirates (replace).
+- **New characters** are registered where the games look for them: the character lists, `hgopathnames.txt`
+  and the character projects (`.apj` / `.cpj`). Seen in the running games: LEGO Batman 2 and Pirates (made a
+  level's player through its text).
 - LEGO Batman 3: Beyond Gotham has its own mode (its files are newer versions of the super-hero era's). Its
   figures, prints, colours, faces, capes and animations are read (and its faces' expression data, which the
   viewer does not use yet for the newer games).

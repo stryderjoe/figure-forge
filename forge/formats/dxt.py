@@ -133,3 +133,38 @@ def encode_dxt1(rgba):
     """DXT1 (BC1, opaque): the colour half of each DXT5 block."""
     blocks = np.frombuffer(encode_dxt5(rgba), dtype=np.uint8).reshape(-1, 16)
     return np.ascontiguousarray(blocks[:, 8:]).tobytes()
+
+
+def encode_dxt1a(rgba):
+    """DXT1 with its one-bit alpha (the newer games' portraits): a block with a clear pixel (alpha < 128) uses
+    the three-colour mode (first endpoint <= second), whose fourth value is clear."""
+    rgba = np.ascontiguousarray(rgba, dtype=np.uint8).copy()
+    h, w, _ = rgba.shape
+    px = _blocks(rgba).astype(np.int32)
+    clear = px[..., 3] < 128                                                    # (n, 16)
+    # clear pixels take the block's mean opaque colour, so they do not pull the endpoints
+    solid = (~clear)[..., None]
+    mean = (px[..., :3] * solid).sum(1) // np.maximum(solid.sum(1), 1)
+    px[..., :3] = np.where(solid, px[..., :3], mean[:, None, :])
+    px[..., 3] = 255
+    filled = px.reshape(h // 4, w // 4, 4, 4, 4).transpose(0, 2, 1, 3, 4).reshape(h, w, 4).astype(np.uint8)
+    blocks = np.frombuffer(encode_dxt5(filled), dtype=np.uint8).reshape(-1, 16)[:, 8:].copy()
+    some = clear.any(1)
+    if some.any():
+        b = blocks[some]
+        c0 = b[:, 0].astype(np.uint32) | (b[:, 1].astype(np.uint32) << 8)
+        c1 = b[:, 2].astype(np.uint32) | (b[:, 3].astype(np.uint32) << 8)
+        lo, hi = np.minimum(c0, c1), np.maximum(c0, c1)
+        p0, p1 = _from565(lo), _from565(hi)
+        palette = np.stack([p0, p1, (p0 + p1) // 2], 1)                             # (m, 3, 3)
+        dist = ((px[some][:, :, None, :3] - palette[:, None, :, :]) ** 2).sum(-1)
+        idx = dist.argmin(2)
+        idx[clear[some]] = 3
+        bits = np.zeros(len(b), dtype=np.uint32)
+        for i in range(16):
+            bits |= idx[:, i].astype(np.uint32) << np.uint32(2 * i)
+        b[:, 0], b[:, 1], b[:, 2], b[:, 3] = lo & 255, lo >> 8, hi & 255, hi >> 8
+        for k in range(4):
+            b[:, 4 + k] = (bits >> np.uint32(8 * k)) & np.uint32(255)
+        blocks[some] = b
+    return np.ascontiguousarray(blocks).tobytes()

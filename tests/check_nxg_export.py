@@ -27,6 +27,11 @@ BS = chr(92)
 failures = []
 
 
+def pack_names(data):
+    from forge.formats import pack
+    return pack.read(data)[0]
+
+
 def check(cond, what):
     print(('ok   ' if cond else 'FAIL ') + what, flush=True)
     if not cond:
@@ -65,9 +70,14 @@ def main(work, glb_path, base):
     # LEGO Batman 2 and LEGO Pirates read definitions from charsnimprojects.pac: it changes too
     pac = BS.join(['chars', 'animprojects.pac'])
     has_pac = gid in ('lb2', 'pirates')
-    replaced = 2 if has_pac else 1
-    check('error' not in out and out.get('replaced') == replaced and out.get('added') == added,
-          f'{replaced} file(s) replaced, {added} added')
+    # the portrait: its image and the copy in icons_tex.pak (LEGO Marvel: and the page of portraits)
+    char_rel = base.split(':')[1].split('/')
+    scene = os.path.join(games[gid], 'stuff', 'icons', f'icon_{char_rel[1]}_nxg.gsc')
+    portraits = 2 + (gid == 'lmsh') + os.path.exists(scene)   # LEGO Pirates: and the icon scene, where there is one
+    replaced = (2 if has_pac else 1) + portraits
+    # (a file the game keeps in another of its archives is added to this copy of GAME.DAT instead)
+    check('error' not in out and out.get('replaced', 0) + out.get('added', 0) == replaced + added,
+          f'{replaced} file(s) replaced and {added} added ({out.get("replaced")} replaced, {out.get("added")} added)')
     arc = DatArchive(dat)
     by = {e.path.lower(): e for e in arc.entries}
     char_rel = base.split(':')[1].split('/')
@@ -77,10 +87,25 @@ def main(work, glb_path, base):
     model_path = next((p for p in new if p.endswith('_nxg.ghg')), '')
     stem = os.path.basename(model_path.replace(BS, '/'))[:-len('_nxg.ghg')]
     check(cd_path in by and bool(model_path), f'the definition and the model are in the archive ({model_path})')
-    skip = {cd_path, pac} if has_pac else {cd_path}
+    icon_path = BS.join(['stuff', 'icons', char_rel[1] + '_nxg.tex'])
+    icons = {icon_path, 'icons_tex.pak'} | ({BS.join(['stuff', 'icons', 'icontpage_nxg.tex'])} if gid == 'lmsh' else set())
+    if os.path.exists(scene):
+        icons.add(BS.join(['stuff', 'icons', f'icon_{char_rel[1]}_nxg.gsc']))
+    changed = [p for p in icons if p in by and (by[p].offset, by[p].size) != before.get(
+        next((q for q in before if q.lower() == p), ''), None)]
+    check(len(changed) == len(icons), f'the portrait files are written ({sorted(changed)})')
+    from forge import gameportrait
+    if icon_path in by:
+        with open(os.path.join(json.load(open(os.path.join(ROOT, 'tests', 'games.json')))[gid], icon_path), 'rb') as f:
+            was = gameportrait.decode(f.read())
+        now = gameportrait.decode(arc.read(by[icon_path]))
+        check(now.shape == was.shape and (now != was).any(), f'the portrait shows another picture ({now.shape[1]} x {now.shape[0]})')
+    skip = ({cd_path, pac} if has_pac else {cd_path}) | icons
     unchanged = sum(1 for p, v in before.items() if p.lower() not in skip and p.lower() in by
                     and (by[p.lower()].offset, by[p.lower()].size) == v)
-    check(unchanged == len(before) - len(skip), f'every other file untouched ({unchanged} of {len(before) - len(skip)})')
+    held = {p.lower() for p in before}
+    others = len(before) - len(skip & held)
+    check(unchanged == others, f'every other file untouched ({unchanged} of {others})')
     if has_pac:
         from forge.formats import pack
         held = {n.lower(): b for n, _k, b, _x in pack.read(arc.read(by[pac]))[0]}
@@ -128,6 +153,15 @@ def main(work, glb_path, base):
     check(new_cd in by and new_cd.replace('.cd', '.txt') in by, 'its definition and text are in the archive')
     coll = arc.read(by[BS.join(['chars', 'collection.txt'])]).decode('latin1')
     check('collect "ff_test"' in coll, 'collection.txt names it')
+    hgo = arc.read(by[BS.join(['chars', 'hgopathnames.txt'])]).decode('latin1')
+    check('\nff_test ' in hgo.replace('\r', ''), 'hgopathnames.txt names its model')
+    if gid == 'pirates':
+        # LEGO Pirates leaves a new character out when it has a portrait of its own: it goes without
+        check(BS.join(['stuff', 'icons', 'ff_test_nxg.tex']) not in by, 'no portrait is added (LEGO Pirates)')
+    else:
+        check(BS.join(['stuff', 'icons', 'ff_test_nxg.tex']) in by, 'it has a portrait of its own')
+        icons_pak = [n.lower() for n, *_ in pack_names(arc.read(by['icons_tex.pak']))]
+        check(BS.join(['stuff', 'icons', 'ff_test_nxg.tex']) in icons_pak, 'icons_tex.pak holds its portrait')
     from forge.formats import pack
     names = [n.lower() for n, *_ in pack.read(arc.read(by[BS.join(['chars', 'charstxt.fpk'])]))[0]]
     check(new_cd.replace('.cd', '.txt') in names, 'charstxt.fpk holds its text')

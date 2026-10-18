@@ -250,10 +250,25 @@ def walk(objs):
             yield from walk(lst)
 
 
-def edit(stream, removes=(), strings=None, values=None):
+def copy_object(stream, obj, texts):
+    """The bytes of a copy of obj (a MOBJ) with some of its strings changed: texts {old text: new text}, matched
+    whole (a string's length word and bytes). The copy's own size follows; its strings must not sit inside nodes of
+    their own (they are the fields of obj and of the classes it holds inline)."""
+    s0, e0 = obj['span']
+    raw = stream.data[s0:e0]
+    for old, new in texts.items():
+        a = old.encode('latin1') + bytes(1)
+        b = new.encode('latin1') + bytes(1)
+        raw = raw.replace(struct.pack('<I', len(a)) + a, struct.pack('<I', len(b)) + b)
+    return struct.pack('<I', len(raw)) + raw[4:]
+
+
+def edit(stream, removes=(), strings=None, values=None, adds=()):
     """A copy of the stream's bytes with objects removed, strings replaced and fixed-size values overwritten.
     removes: objects (from .roots) to cut out, with their list counts lowered; strings: {offset of the length
-    word: new text}; values: {offset: bytes of the same size}. Every enclosing node's size follows the change."""
+    word: new text}; values: {offset: bytes of the same size}; adds: [(object, bytes of a new object)], each new
+    object put into the object's list right after it (see copy_object), the list's count raised. Every enclosing
+    node's size follows the change."""
     d = stream.data
     cuts = []                                    # (start, end, new bytes, chain of enclosing node starts)
     for at, text in (strings or {}).items():
@@ -267,6 +282,11 @@ def edit(stream, removes=(), strings=None, values=None):
         cuts.append((s0, e0, b'', obj['chain'][:-1]))
         lst = obj['chain'][-2]                   # the OLST holding it
         counts[lst] = counts.get(lst, 0) + 1
+    for obj, raw in adds:
+        _s0, e0 = obj['span']
+        cuts.append((e0, e0, raw, obj['chain'][:-1]))
+        lst = obj['chain'][-2]
+        counts[lst] = counts.get(lst, 0) - 1
     out = bytearray(d)
     for at, raw in (values or {}).items():
         out[at:at + len(raw)] = raw

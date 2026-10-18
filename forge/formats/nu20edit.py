@@ -31,10 +31,16 @@ class ModelFile:
             if data[at + 4:at + 8] != MAGIC:
                 raise EditError('not an NU20 model')
             payload, block = data[4:at + 4], data[at + 4:]
+            # scenes (.gsc) end with 128 more bytes after the block: kept as they are
+            size = -struct.unpack_from('<i', block, 4)[0]
+            block, self.after = block[:size], block[size:]
         else:
             (neg,) = struct.unpack_from('<i', data, 4)
             size = -neg
             block, payload = data[:size], data[size:]
+            # scenes (.gsc) end with 128 more bytes after the payload its size word counts: kept as they are
+            (total,) = struct.unpack_from('<I', payload, 0)
+            payload, self.after = payload[:4 + total], payload[4 + total:]
         self.block = bytearray(block)
         self._chunks()
         self._payload(payload)
@@ -211,5 +217,5 @@ class ModelFile:
                 payload += struct.pack('<I', len(buf)) + buf
         payload += self.payload_tail
         if self.old_layout:
-            return struct.pack('<I', len(payload)) + bytes(payload) + bytes(block)
-        return bytes(block) + struct.pack('<I', len(payload)) + bytes(payload)
+            return struct.pack('<I', len(payload)) + bytes(payload) + bytes(block) + self.after
+        return bytes(block) + struct.pack('<I', len(payload)) + bytes(payload) + self.after

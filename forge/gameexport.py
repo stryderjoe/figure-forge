@@ -11,6 +11,8 @@ import re
 import shutil
 import struct
 
+import numpy as np
+
 from . import gamewrite, newchar
 from .formats import classic, datpatch
 
@@ -63,6 +65,7 @@ def files_for(game, base_char, glb, mode, name='', report=print):
         lr = re.sub(r'(?i)_pc\.ghg$', lambda m: '_LR_PC.GHG' if m.group(0).isupper() else '_lr_pc.ghg', rel)
         if os.path.exists(os.path.join(game.root, lr)):
             files[lr] = model
+        files.update(portrait_files(game, glb, txt, classic.model_stem(base_char.path), None, report))
         return files
     if mode == 'new':
         name = (name or '').strip().lower()
@@ -70,7 +73,9 @@ def files_for(game, base_char, glb, mode, name='', report=print):
             raise ExportError('give the new character a name of 2 to 24 letters, digits or _')
         if name in {e['name'].lower() for e in game.characters()}:
             raise ExportError(f'{name} is already a character of this game')
-        return newchar.build(game.root, base_char.path, name, model, upper=game.id == 'tcs')
+        files = newchar.build(game.root, base_char.path, name, model, upper=game.id == 'tcs')
+        files.update(portrait_files(game, glb, txt, classic.model_stem(base_char.path), name, report))
+        return files
     raise ExportError('mode must be replace or new')
 
 
@@ -123,15 +128,35 @@ def nxg_files_for(game, base_char, glb, mode, name='', report=print):
         if lb3:
             files.update(lb3_resources(game, files, [f'{folder}{BS}{model_name}', cd_rel]))
         files.update(anim_projects(game, files, cd_rel))
+        files.update(portrait_files(game, glb, base_char.path[:-3] + '.txt', os.path.basename(base_char.path)[:-3],
+                                    None, report))
         report(f'{base_char.name} now wears the figure (model {model_name}).')
         return files
     files.update(nxg_new_character(game, base_char, new, cd))
+    files.update(project_files(game, base_char, new))
     if lb3:
         files.update(lb3_resources(game, files, [f'{folder}{BS}{model_name}',
                                                  next(k for k in files if k.lower().endswith(f'{BS}{new}.cd'))]))
     files.update(anim_projects(game, files, archive_path(game.root, base_char.path)))
+    files.update(portrait_files(game, glb, base_char.path[:-3] + '.txt', os.path.basename(base_char.path)[:-3],
+                                new, report, files.get(f'chars{BS}collection.txt')))
     report(f'{new} joins the character list (from {base_char.name}, model {model_name}).')
     return files
+
+
+def portrait_files(game, glb, txt_path, stem, new, report=print, collection=None):
+    """The game's portrait files with the figure's portrait: in place of the body's (new None) or as the new
+    character's own. A portrait that cannot be made is reported, never a reason to stop the export."""
+    from . import gameportrait, portrait
+    try:
+        txt = open(txt_path, 'rb').read() if txt_path and os.path.exists(txt_path) else b''
+        out = gameportrait.files(game, txt, stem, portrait.render(glb, 256), new, report, collection)
+    except (ValueError, OSError) as e:
+        report(f'The portrait was not changed ({e}).')
+        return {}
+    if out:
+        report('The portrait shows the figure.')
+    return out
 
 
 def anim_projects(game, files, base_rel):
@@ -157,11 +182,23 @@ def anim_projects(game, files, base_rel):
             n, k, _old, x = entries[at[low.split(BS, 1)[1]]]
             entries[at[low.split(BS, 1)[1]]] = (n, k, blob, x)
         else:
+            if like in at:
+                # the base's entry spelled as the pack spells it (LEGO Pirates: MiniFigs\WillTurner\WILLTURNER.cd)
+                name = cased_like(entries[at[like]][0], name)
             # the pack keeps its .cd files first: a new one goes after the last of them
             last = max(i for i, (n, *_r) in enumerate(entries) if n.lower().endswith('.cd'))
             entries.insert(last + 1, (name, 4, blob, extra))
             at = {n.lower(): i for i, (n, *_r) in enumerate(entries)}
     return {f'chars{BS}animprojects.pac': pack.write(entries, stamp, tail, align=4, gap=2)}
+
+
+def cased_like(model, path):
+    r"""path (a new character's file: ...\<new>\<new>.<ext>) spelled like model (its base's entry in a pack):
+    every folder above the character's own as model has it."""
+    m, p = model.split(BS), path.split(BS)
+    if len(m) != len(p):
+        return path
+    return BS.join(m[:-2] + p[-2:])
 
 
 def lb3_resources(game, files, which):
@@ -235,17 +272,86 @@ def nxg_new_character(game, base_char, new, cd):
     out = {f'{folder}{BS}{new}.cd': cd}
     txt_path = base_char.path[:-3] + '.txt'
     txt = open(txt_path, 'rb').read() if os.path.exists(txt_path) else b''
+    from .gameportrait import NO_NEW_PORTRAIT, renamed_icon
+    if game.id not in NO_NEW_PORTRAIT:
+        txt = renamed_icon(txt, new)
     out[f'{folder}{BS}{new}.txt'] = txt
     with open(os.path.join(chars, 'collection.txt'), 'rb') as f:
         coll = f.read().rstrip(b'\0')
     coll = coll.rstrip(b'\r\n') + f'\r\ncollect "{new}"\r\n'.encode('latin1')
     out[f'chars{BS}collection.txt'] = coll
+    changes = {f'chars{BS}collection.txt': coll}
+    # chars\hgopathnames.txt names every character's model (a character missing from it is left out of a level
+    # that names it: found in the running LEGO Batman 2, 2026-10-17): the base's line under the new name
+    hgo = os.path.join(chars, 'hgopathnames.txt')
+    if os.path.exists(hgo):
+        with open(hgo, 'rb') as f:
+            names = f.read().rstrip(b'\0')
+        base = os.path.basename(base_char.path)[:-3].lower().encode('latin1')
+        lines = names.replace(b'\r', b'').split(b'\n')
+        like = next((ln for ln in lines if ln.split(b' ', 1)[0].lower() == base), None) or next(
+            ln for ln in lines if b'super_minifig.hgo' in ln.lower())
+        names = names.rstrip(b'\r\n') + b'\r\n' + new.encode('latin1') + b' ' + like.split(b' ', 1)[1] + b'\r\n'
+        out[f'chars{BS}hgopathnames.txt'] = names
+        changes[f'chars{BS}hgopathnames.txt'] = names
     fpk = os.path.join(chars, 'charstxt.fpk')
     if os.path.exists(fpk):
         with open(fpk, 'rb') as f:
             data = f.read()
-        out[f'chars{BS}charstxt.fpk'] = pack.replace(data, {f'chars{BS}collection.txt': coll},
-                                                     add=[(f'{folder}{BS}{new}.txt', 1, txt)])
+        name = f'{folder}{BS}{new}.txt'
+        base_txt = archive_path(game.root, txt_path).lower()
+        like = next((n for n, *_r in pack.read(data)[0] if n.lower() == base_txt), None)
+        if like:
+            name = cased_like(like, name)
+        out[f'chars{BS}charstxt.fpk'] = pack.replace(data, changes, add=[(name, 1, txt)])
+    return out
+
+
+def project_add(data, base, new):
+    """A character project (chars\\*.apj in LEGO Batman 2 and LEGO Pirates, *.cpj in LEGO Marvel and LEGO Batman 3)
+    with the new character's definition listed right after its base's (a copy of the base's entry: its folder and name
+    changed), or None when the project does not list the base. The games load only the definitions their projects list (found in the running
+    LEGO Batman 2, 2026-10-17: a new character in every other list was still left out of the level)."""
+    from .formats import ttstream
+    st = ttstream.Stream(data)
+    for root in (o for lst in st.roots for o in lst):
+        defs = root['components'].get('Char Def Files', [])
+        names = [_editor_file(o) for o in defs]
+        if any(n and n[1].lower() == new.lower() for n in names):
+            return data
+        for o, n in zip(defs, names):
+            if n and n[1].lower() == base.lower():
+                folder = n[0].rstrip('\\').rsplit('\\', 1)
+                path = (folder[0] + '\\' if len(folder) > 1 else '') + new + '\\'
+                raw = ttstream.copy_object(st, o, {n[0]: path, n[1]: new})
+                return ttstream.edit(st, adds=[(o, raw)])
+    return None
+
+
+def _editor_file(obj):
+    """(FilePath, FileName) of a project entry (held inline through its base classes), or None."""
+    f = obj['fields']
+    while 'FilePath' not in f:
+        inner = next((v for v in f.values() if isinstance(v, dict) and 'fields' in v), None)
+        if inner is None:
+            return None
+        f = inner['fields']
+    if not isinstance(f.get('FilePath'), str) or not isinstance(f.get('FileName'), str):
+        return None
+    return f['FilePath'], f['FileName']
+
+
+def project_files(game, base_char, new):
+    """{archive path: bytes} of the character projects that list the base, each listing the new character too."""
+    chars = os.path.join(game.root, 'chars')
+    out = {}
+    base = os.path.basename(base_char.path)[:-3]
+    for name in sorted(os.listdir(chars)):
+        if name.lower().endswith(('.apj', '.cpj')):
+            with open(os.path.join(chars, name), 'rb') as f:
+                got = project_add(f.read(), base, new)
+            if got is not None:
+                out[f'chars{BS}{name}'] = got
     return out
 
 
@@ -311,7 +417,9 @@ def merge_shared(install, files, game_root):
     (an earlier export) merged: the entries this export changed or added against the game's own copy go into
     the archive's current copy. Other files are returned as they are."""
     from .formats import pack
-    shared = [k for k in files if k.lower().endswith(('.pac', '.fpk', '.pak', 'collection.txt'))]
+    shared = [k for k in files if k.lower().endswith(('.pac', '.fpk', '.pak', 'collection.txt', 'hgopathnames.txt',
+                                                      '.tsh', '.gsc', '.apj', '.cpj'))
+              or 'icontpage' in k.lower()]
     if not shared:
         return files
     now = _read_installed(install, shared)
@@ -326,7 +434,19 @@ def merge_shared(install, files, game_root):
         if cur == orig:
             continue                                    # untouched so far: this export's copy stands
         mine = files[k]
-        if mine[:4] == struct.pack('<I', pack.MAGIC) and cur[:4] == mine[:4]:
+        if k.lower().endswith(('.apj', '.cpj')):
+            out[k] = project_merge(cur, orig, mine)
+        elif k.lower().endswith('.tsh'):
+            from .gameportrait import tsh_merge
+            out[k] = tsh_merge(cur, orig, mine)
+        elif k.lower().endswith('.gsc'):
+            from .gameportrait import gsc_merge
+            out[k] = gsc_merge(cur, orig, mine)
+        elif len(mine) == len(orig) == len(cur) and not k.lower().endswith(('.pac', '.fpk', '.pak', '.txt')):
+            # a sheet of portraits changed in place: this export's changed bytes onto the archive's copy
+            a, o, c = (np.frombuffer(x, np.uint8) for x in (mine, orig, cur))
+            out[k] = np.where(a != o, a, c).astype(np.uint8).tobytes()
+        elif mine[:4] == struct.pack('<I', pack.MAGIC) and cur[:4] == mine[:4]:
             out[k] = _merge_pack(cur, orig, mine)
         elif k.lower().endswith('.txt'):
             had = set(orig.replace(b'\r', b'').split(b'\n'))
@@ -334,6 +454,65 @@ def merge_shared(install, files, game_root):
             extra = [ln for ln in mine.replace(b'\r', b'').split(b'\n') if ln.strip() and ln not in had
                      and ln not in have]
             out[k] = cur.rstrip(b'\0').rstrip(b'\r\n') + b''.join(b'\r\n' + ln for ln in extra) + b'\r\n'
+    return _fit_portrait_pack(_merge_portrait_page(install, files, out, game_root, now), game_root)
+
+
+def project_merge(cur, orig, mine):
+    """A project an earlier export changed (cur) with the entries this export added against the game's (orig)."""
+    from .formats import ttstream
+
+    def entries(data):
+        st = ttstream.Stream(data)
+        return [_editor_file(o) for lst in st.roots for r in lst for o in r['components'].get('Char Def Files', [])]
+    had = set(entries(orig))
+    m = entries(mine)
+    out = cur
+    for i, e in enumerate(m):
+        if e and e not in had:
+            before = next((m[j] for j in range(i - 1, -1, -1) if m[j] in had), None)
+            got = project_add(out, before[1], e[1]) if before else None
+            if got is not None:
+                out = got
+    return out
+
+
+def _merge_portrait_page(install, files, out, game_root, now):
+    """LEGO Marvel: a new character's portrait goes in the page cell of its line in the collection as merged (an
+    earlier export's characters keep theirs), in the archive's current page and its copy in icons_tex.pak."""
+    from . import gameportrait
+    from .formats import pack
+    page_k = next((k for k in files if k.lower().replace('/', BS) == f'stuff{BS}icons{BS}icontpage_nxg.tex'), None)
+    coll_k = next((k for k in out if k.lower().endswith(f'chars{BS}collection.txt')), None)
+    if page_k is None or coll_k is None:
+        return out
+    page = out[page_k]
+    with open(os.path.join(game_root, 'chars', 'collection.txt'), 'rb') as f:
+        own = {n.lower() for n in re.findall(rb'(?im)^\s*collect\s+"([^"]+)"', f.read())}
+    added = [n.decode('latin1') for n in re.findall(rb'(?im)^\s*collect\s+"([^"]+)"', out[coll_k]) if n.lower() not in own]
+    # every character the game did not have: its portrait (this export's, or an earlier one's in the archive) in
+    # the cell of its line
+    mine = {k.lower().replace('/', BS): v for k, v in files.items()}
+    want = [f'stuff{BS}icons{BS}{n.lower()}_nxg.tex' for n in added]
+    have = _read_installed(install, [w for w in want if w not in mine])
+    for n, w in zip(added, want):
+        icon = mine.get(w) or have.get(w)
+        if icon:
+            page = gameportrait.place_on_page(page, out[coll_k], n, icon)
+    out[page_k] = page
+    pak_k = next((k for k in out if k.lower() == 'icons_tex.pak'), None)
+    if pak_k:
+        out[pak_k] = pack.replace(out[pak_k], {f'stuff{BS}icons{BS}icontpage_nxg.tex': page})
+    return out
+
+
+def _fit_portrait_pack(out, game_root):
+    """After merging: LEGO Pirates' icons_tex.pak must not grow (gameportrait.fit_pack)."""
+    from . import gameportrait
+    for k in out:
+        if k.lower() == 'icons_tex.pak':
+            src = os.path.join(game_root, k)
+            if os.path.exists(src):
+                out[k] = gameportrait.fit_pack(out[k], os.path.getsize(src))
     return out
 
 
@@ -345,6 +524,7 @@ def _merge_pack(cur, orig, mine):
     o = {n.lower(): b for n, _k, b, _x in pack.read(orig)[0]}
     m_ents = pack.read(mine)[0]
     at = {n.lower(): i for i, (n, *_r) in enumerate(c_ents)}
+    in_order = [n for n, *_r in c_ents] == sorted(n for n, *_r in c_ents)
     prev = None
     for n, k, b, x in m_ents:
         low = n.lower()
@@ -354,12 +534,15 @@ def _merge_pack(cur, orig, mine):
         if low in at:
             cn, ck, _cb, cx = c_ents[at[low]]
             c_ents[at[low]] = (cn, ck, b, cx)
+        elif in_order:
+            pack.insert_sorted(c_ents, (n, k, b, x))
+            at = {nn.lower(): i for i, (nn, *_r) in enumerate(c_ents)}
         else:
             c_ents.insert(at[prev] + 1 if prev in at else len(c_ents), (n, k, b, x))
             at = {nn.lower(): i for i, (nn, *_r) in enumerate(c_ents)}
         prev = low
     layout = pack._layout(cur, pack.read(cur)[0], stamp, tail)
-    return pack.write(c_ents, stamp, tail, **layout)
+    return pack.write(c_ents, stamp, tail, shared=pack.is_shared(cur) or pack.is_shared(mine), **layout)
 
 
 def restore(install):
