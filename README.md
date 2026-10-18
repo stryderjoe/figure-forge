@@ -106,12 +106,12 @@ says which layers the game shows and which animations it uses. Figure Forge:
   puts it where each game keeps its portraits: the classic games' icon scenes, the newer games' icon images
   and packs, Marvel's page of portraits and LEGO Batman 3's sheet. A new character gets a portrait of its
   own in every game but LEGO Pirates, which leaves a new character out of the game when it has one (its new
-  characters go without). Seen in the running games: LEGO Batman 2008 and LEGO Batman 2 (replace and new),
-  LEGO Batman 3 (new), Pirates (replace). Marvel draws its corner portrait from the model itself, so it shows
-  the figure there already.
+  characters go without). Seen in the running games: LEGO Batman 2008, LEGO Batman 2 and Star Wars (replace
+  and new), Indiana Jones and LEGO Batman 3 (new), Pirates (replace). Marvel's corner portrait in play did not
+  change with its portrait files (it looks drawn from the model in play).
 - **New characters** are registered where the games look for them: the character lists, `hgopathnames.txt`
   and the character projects (`.apj` / `.cpj`). Seen in the running games as a level's player (made so
-  through the level's text): LEGO Batman 2008, LEGO Batman 2, Marvel, Pirates and LEGO Batman 3.
+  through the level's text; that step is not made by Figure Forge yet): all seven games.
 - LEGO Batman 3: Beyond Gotham has its own mode (its files are newer versions of the super-hero era's). Its
   figures, prints, colours, faces, capes and animations are read (and its faces' expression data, which the
   viewer does not use yet for the newer games).
