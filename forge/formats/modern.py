@@ -206,6 +206,28 @@ def _cd_index(chars_dir):
     return _CDS[chars_dir]
 
 
+def load_face(ref):
+    """'<pack path>::<entry name>' -> the clip's face block (an3.An4Set.face: per frame a weight for each facial
+    target), or None."""
+    from . import an3, pack, ttdeflate
+    path, entry = ref.split('::', 1)
+    if os.path.isdir(path):
+        with open(os.path.join(path, entry), 'rb') as f:
+            data = f.read()
+    else:
+        with open(path, 'rb') as f:
+            items = pack.read(f.read())[0]
+        data = next(x[2] for x in items if x[0] == entry)
+    if ttdeflate.is_packed(data):
+        data = ttdeflate.decompress(data)
+    if data[4:8] == b'ANI9':
+        return None
+    try:
+        return an3.An4Set(ref, data).face()
+    except (ValueError, struct.error):
+        return None
+
+
 def load_clip(ref):
     """'<pack path>::<entry name>' -> the animation block for the main skeleton (the one with most nodes)."""
     from . import an3, pack, ttdeflate
@@ -940,6 +962,19 @@ class Character:
         if any(not -100.0 < x < 100.0 for v in pos for x in v):
             return None             # read from the wrong buffer (a reference resolved by guess): not drawn
         return pos, nrm or [], [tuple(u[:2]) for u in uv] if uv else [], col, [tuple(t) for t in tris], skin
+
+    def morphs(self, mesh_index):
+        """{facial target number: [(dx, dy, dz)] per vertex} of a piece (the faces' blend shapes, model space),
+        {} when it has none or was fixed in a pose."""
+        if mesh_index in self._baked:
+            return {}
+        mesh, _names, i = self._source(mesh_index)
+        if not mesh.parts[i].get('morphs'):
+            return {}
+        try:
+            return nxgmesh.morph_offsets(mesh, i)
+        except (ValueError, struct.error, IndexError):
+            return {}
 
     def material(self, mesh_index):
         mi = self._mesh_mat.get(mesh_index)

@@ -1,8 +1,9 @@
 """Build a figure headlessly and export it as GLB (no window).
 
-    python tests/make_glb.py <out.glb> <base id> [part id ...]
+    python tests/make_glb.py <out.glb> <base id> [part id ... | -part id ...]
 
-Uses tests/games.json. Each part id is added to the figure fitted to the base, replacing its slot.
+Uses tests/games.json. Each part id is added to the figure fitted to the base, replacing its slot. With FF_GAME_GLB=1
+the GLB is the one the game export sends (the faces' mouth masks kept, flagged).
 """
 import json
 import os
@@ -38,8 +39,20 @@ def main(argv):
         page.call('Page.navigate', url=f'http://127.0.0.1:{httpd.server_address[1]}/?base={base}')
         page.wait("document.body && document.body.dataset.ready === '1'", 300)
         for p in parts:
-            page.js(f"FF.addPart({json.dumps(p)})")
+            if p.startswith('-'):                       # '-<part id>': take that part off
+                page.js(f"FF.removePart({json.dumps(p[1:])})")
+            else:
+                page.js(f"FF.addPart({json.dumps(p)})")
         page.js("FF.S.exportName = 'figure'")
+        if os.environ.get('FF_GAME_GLB'):
+            # the GLB the game export sends (keeps the faces' mouth masks, flagged, for the portrait)
+            import base64
+            data = page.js("FF.figureGlb().then(b => { let s = ''; for (let i = 0; i < b.length; i += 32768) "
+                           "s += String.fromCharCode.apply(null, b.subarray(i, i + 32768)); return btoa(s); })")
+            with open(out, 'wb') as f:
+                f.write(base64.b64decode(data))
+            print('wrote', out, '(game GLB)')
+            return
         err = page.js("FF.doExport('glb').then(() => '').catch(e => e.message)")
         print('status:', page.js("document.querySelector('#status').textContent"), 'meshes:', page.js("(() => { let n = 0; FF.viewer.figure.traverse(o => { if (o.isMesh) n++; }); return n; })()"))
         if err:

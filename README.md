@@ -19,9 +19,11 @@ Parts and animations move between all of them.
    mirror them over the part's UV layout until they fit.
 5. **Render**: the classic games' shiny-plastic look, a studio look, or flat textures; save a PNG.
 6. **Rig**: the figure is rigged on the game skeleton with the games' own skin weights; uploaded parts ride
-   on a bone or are skinned to the nearest bones.
+   on a bone or are skinned with the body's own game weights (each point takes the weights of the body's
+   nearest points, so it bends at the joints as the body does).
 7. **Animate**: play any character's own animations on your figure. Clips from another character, even
-   from another game, are retargeted to your body.
+   from another game, are retargeted to your body. In LEGO Batman 2, Marvel and LEGO Batman 3 the faces move
+   with them (the games' facial blend shapes and each clip's face track).
 8. **Export**: GLB or glTF (rigged, with the playing animation), FBX, Blender `.blend` and USD (through
    Blender), OBJ with its materials and textures, STL, PLY, PNG, and a project file you can open again.
    **Into the game**: put the figure into its body's game, replacing that character or as a new one.
@@ -90,11 +92,16 @@ says which layers the game shows and which animations it uses. Figure Forge:
 | the user interface in headless Microsoft Edge: every step, every export, saving and reopening a project | all passed |
 | exports opened in Blender: GLB, glTF, FBX, `.blend` (one armature, skinned meshes, moving bones); STL, PLY, OBJ | all passed |
 | the Windows build, started as a server | serves the page and the games |
+| the newer games' faces (`tests/check_faces.py`): LEGO Batman 2's Joker, Marvel's Hulk, LEGO Batman 3's Joker | each face's blend shapes load, a clip's face track moves them, the face changes between frames, a GLB keeps shapes and weights |
 | a figure put into copies of LEGO Batman 2's, LEGO Marvel's and LEGO Pirates' GAME.DAT (`tests/check_nxg_export.py`), read back | the body wears it; every other file untouched; Restore gives the archive back |
 
 ## Limits
 
-- Faces do not animate: the games' expression tracks are not read.
+- Faces move in LEGO Batman 2, LEGO Marvel and LEGO Batman 3 (blend shapes driven by each clip's face track).
+  The classic games print their faces and do not move them in play; their cutscenes' expression track is not
+  read. LEGO Pirates' clips carry no face track.
+- Put into LEGO Marvel or LEGO Batman 3, a figure's face (the newer games' face pieces) is written without its
+  mouth mask, decal settings or blend shapes, and in play it can look blank or scrambled.
 - Figures go into LEGO Batman, Indiana Jones, Star Wars, LEGO Batman 2, LEGO Marvel Super Heroes, LEGO
   Pirates and LEGO Batman 3 (replace a character or add one). The LEGO Batman 2, Marvel, Pirates and LEGO
   Batman 3 exports are checked by reading the archives back (LEGO Batman 3's load lists are written the way
@@ -104,11 +111,13 @@ says which layers the game shows and which animations it uses. Figure Forge:
   takes the place of the body template image rather than adding a texture.
 - **Portraits:** every export draws the figure's portrait (the head, front on, as the games draw theirs) and
   puts it where each game keeps its portraits: the classic games' icon scenes, the newer games' icon images
-  and packs, Marvel's page of portraits and LEGO Batman 3's sheet. A new character gets a portrait of its
-  own in every game but LEGO Pirates, which leaves a new character out of the game when it has one (its new
-  characters go without). Seen in the running games: LEGO Batman 2008, LEGO Batman 2 and Star Wars (replace
-  and new), Indiana Jones and LEGO Batman 3 (new), Pirates (replace). Marvel's corner portrait in play did not
-  change with its portrait files (it looks drawn from the model in play).
+  and packs, Marvel's page of portraits and LEGO Batman 3's sheet. Faces with a mouth mask are drawn with the
+  mouth closed, as the games show them. A new character gets a portrait of its own in every game but LEGO
+  Pirates, which leaves a new character out of the game when it has a full-size portrait of its own (in a slot
+  of its own or in a cut character's): its new characters show their body's portrait. Seen in the running
+  games: LEGO Batman 2008, LEGO Batman 2, Star Wars and Indiana Jones (replace and new), LEGO Batman 3 (new),
+  Pirates (replace). LEGO Marvel and LEGO Batman 3 draw the corner portrait in play from the figure itself
+  (seen: it shows the figure's head); their portrait files are the games' other pictures of the character.
 - **New characters** are registered where the games look for them: the character lists, `hgopathnames.txt`
   and the character projects (`.apj` / `.cpj`). Seen in the running games as a level's player (made so
   through the level's text; that step is not made by Figure Forge yet): all seven games.
@@ -117,7 +126,6 @@ says which layers the game shows and which animations it uses. Figure Forge:
   viewer does not use yet for the newer games).
 - A part fitted from a very different body (a droid's torso on a minifig) keeps its own shape and may need a
   touch of rigging.
-- An uploaded part that is skinned takes the single nearest bone; it does not blend between bones.
 - Collada (`.dae`) export needs a Blender version that still has it.
 
 ## Credits and licence

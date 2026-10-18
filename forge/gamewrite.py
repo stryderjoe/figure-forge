@@ -192,6 +192,14 @@ class GameWriter:
                 plan[slot] = v
         return plan
 
+    def _kept_layers(self, filled, pieces):
+        """The special layers (hat, hair, cape, back) the figure does not fill, whose own piece the game goes on
+        drawing. A figure with hair or headgear of its own does not keep the character's hat or hair: it would
+        be drawn over the figure's head."""
+        plan = self.layer_plan()
+        own_head = any(p['slot'] in ('hair', 'headgear') for p in pieces)
+        return {v for k, v in plan.items() if k != 'main' and not (own_head and k in ('headgear', 'hair'))} - filled
+
     def layer_for(self, slot):
         plan = self._plan if hasattr(self, '_plan') else self.layer_plan()
         self._plan = plan
@@ -241,6 +249,8 @@ class GameWriter:
 
         pieces = []
         for rec in glb.meshes():
+            if rec.get('occluder'):
+                continue                # a mouth mask, for the portrait only
             pos = rec['positions'] * mirror
             nrm = rec['normals'] * mirror if rec['normals'] is not None else None
             uv = rec['uv'] if rec['uv'] is not None else np.zeros((len(pos), 2))
@@ -323,6 +333,16 @@ class GameWriter:
         pieces = self._convert(glb)
         if not pieces:
             raise WriteError('the figure has no meshes')
+        self._pieces = pieces
+        # a character whose hair layer is drawn only once its hat is off (Indiana Jones: hair 7, hat 8, layers
+        # shown 0,2,6,8,9): a figure with hair and no hat wears its hair in the hat's layer, or it would not show
+        # (in the main layer the running game crashed loading the level, 2026-10-18)
+        plan = self.layer_plan()
+        shown = classic.chosen_layers(self.txt) or [0]
+        if (plan.get('hair') is not None and plan['hair'] not in shown and plan.get('headgear') in shown
+                and not any(p['slot'] == 'headgear' for p in pieces)):
+            plan['hair'] = plan['headgear']
+        self._plan = plan
         templates = self._template_materials()
         if (True, False) not in templates or (False, False) not in templates:
             raise WriteError('the target model lacks a skinned or a rigid material to copy')
@@ -386,10 +406,15 @@ class GameWriter:
         m.set_ptr(g + 4, table)
         m.set_u32(g, len(all_recs))
 
-        # 3. materials: a copy of the template material of each kind, put in a material slot of its own
+        # 3. materials: a copy of the template material of each kind, put in a material slot of its own; the
+        # slots of the pieces a kept layer goes on drawing are left alone (found in the running Indiana Jones,
+        # 2026-10-18: Indy's kept hat took the colour of the figure material written into its slot)
         mt = m.ptr(g + 8)
         mat_count = m.u32(g + 0xC)
-        used_slots, mat_slot = set(), {}
+        kept = self._kept_layers({self.layer_for(p['slot']) for p in pieces}, pieces)
+        kept_model_ids = {part['model'] for L in kept for part in self.char.layers[L]['parts']}
+        used_slots = {mat for md in nu.models if md['index'] in kept_model_ids for mat in md['materials']}
+        mat_slot = {}
         for key in atlas_of:
             tmpl = templates.get(key, templates[(key[0], False)])
             slot = tmpl if tmpl not in used_slots else next(i for i in range(mat_count) if i not in used_slots)
@@ -442,9 +467,7 @@ class GameWriter:
                     if mesh['offset'] == target:
                         draw_cmd[mesh['index']] = k
         # a special layer the figure does not fill keeps the character's own piece: its models and meshes stay
-        plan = self.layer_plan()
-        filled = {key[1] for key in groups}
-        kept = {v for k, v in plan.items() if k != 'main'} - filled
+        kept = self._kept_layers({key[1] for key in groups}, pieces)
         kept_models = {part['model'] for L in kept for part in self.char.layers[L]['parts']}
         kept_meshes = {mi for L in kept for part in self.char.layers[L]['parts'] for mi in part['meshes']}
         usable = [i for i in mesh_table_order if i in draw_cmd and i not in kept_meshes]
@@ -577,7 +600,7 @@ class GameWriter:
         if sample_obj is None:
             raise WriteError('no object in the target model to copy')
         filled = {key[1] for key in object_model}
-        keep = {v for k, v in plan.items() if k != 'main'} - filled
+        keep = self._kept_layers(filled, self._pieces)
         for L in range(count):
             if L in keep:
                 continue

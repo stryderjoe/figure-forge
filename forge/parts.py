@@ -107,6 +107,9 @@ def part_json(game, part_id, base, model_space=False):
             vcol = np.where(srgb <= 0.04045, srgb / 12.92, ((srgb + 0.055) / 1.055) ** 2.4)
         p = np.c_[np.asarray(pos, dtype=np.float64), np.ones(len(pos))] @ placed
         n = np.asarray(nrm, dtype=np.float64) @ placed[:3, :3] if len(nrm) == len(pos) else None
+        # the newer games' faces: blend shapes, offsets that turn as the vertices do (no translation)
+        shapes = {k: np.asarray(v, dtype=np.float64) @ placed[:3, :3]
+                  for k, v in (donor.morphs(mi) if hasattr(donor, 'morphs') else {}).items() if len(v) == len(pos)}
         t = np.asarray(tris, dtype=np.int64)
         out = {}
         if info['kind'] == 'rigid':
@@ -119,10 +122,12 @@ def part_json(game, part_id, base, model_space=False):
             p3 = (p @ to_anchor)[:, :3] @ turn
             if n is not None:
                 n = n @ to_anchor[:3, :3] @ turn
+            shapes = {k: v @ to_anchor[:3, :3] @ turn for k, v in shapes.items()}
             if model_space:
                 p3 = (np.c_[p3, np.ones(len(p3))] @ wb[b])[:, :3]
                 if n is not None:
                     n = n @ wb[b][:3, :3]
+                shapes = {k: v @ wb[b][:3, :3] for k, v in shapes.items()}
             out['bone'] = base.common[b]
             out['boneName'] = base.bones[b]['name']
         else:
@@ -140,8 +145,10 @@ def part_json(game, part_id, base, model_space=False):
             vcol = vcol[used] if vcol is not None else None
             uv = [uv[i] for i in used] if len(uv) == len(pos) else []
             w = [weights[i] for i in used] if weights else [[] for _ in used]
+            shapes = {k: v[used] for k, v in shapes.items()}
             moved = np.zeros((len(used), 3))
             moved_n = np.zeros((len(used), 3)) if n is not None else None
+            moved_s = {k: np.zeros((len(used), 3)) for k in shapes}
             idx = np.zeros((len(used), 4), dtype=np.int64)
             wts = np.zeros((len(used), 4))
             cache = {}
@@ -157,10 +164,13 @@ def part_json(game, part_id, base, model_space=False):
                     moved[vi] += (x / total) * (p[vi] @ m)[:3]
                     if moved_n is not None:
                         moved_n[vi] += (x / total) * (n[vi] @ m[:3, :3])
+                    for sk, sv in shapes.items():
+                        moved_s[sk][vi] += (x / total) * (sv[vi] @ m[:3, :3])
                     idx[vi, k] = b
                     wts[vi, k] = x / total
             p3 = moved
             n = moved_n
+            shapes = moved_s
             out['skinIndex'] = idx
             out['skinWeight'] = wts
         if p3.ndim == 2 and p3.shape[1] == 4:
@@ -178,6 +188,9 @@ def part_json(game, part_id, base, model_space=False):
             out['uv'] = uvs
         out['index'] = t[:, [0, 2, 1]].astype(np.int64)      # the mirror reverses the winding
         out['material'] = mat
+        if shapes:
+            out['morphs'] = {str(k): skeleton.to_viewer_points(v).round(5).ravel().tolist()
+                             for k, v in sorted(shapes.items())}
         if vcol is not None:
             out['color'] = vcol
         out['mesh'] = mi

@@ -255,6 +255,34 @@ def main():
             return [await add('sword.obj', 'obj', %s, 'r_hand', 'rigid', 'm'), await add('plate.ldr', 'ldr', %s, 'chest', 'skin', 'ldu')];
         })()""" % (json.dumps(obj.replace('\\n', '\n')), json.dumps(ldr.replace('\\n', '\n'))))
         check(got and all(got), f'uploaded OBJ (rigid on the hand) and LDraw (skinned) parts: {got}')
+        # a skinned upload takes the body's own game weights: a copy of the body's skinned mesh, uploaded, gets
+        # back (nearly) the weights it has in the game
+        got = page.js("""(() => {
+            const V = FF.viewer;
+            let src = null;
+            V.figure.traverse(o => { if (!src && o.isSkinnedMesh && o.userData.slot !== 'custom' && o.geometry.attributes.position.count > 100) src = o; });
+            if (!src) return null;
+            V.restPose();
+            const g = new FF.THREE.BufferGeometry();
+            g.setAttribute('position', src.geometry.attributes.position.clone());
+            g.setIndex(src.geometry.index ? src.geometry.index.clone() : null);
+            const m = new FF.THREE.Mesh(g, new FF.THREE.MeshBasicMaterial());
+            m.applyMatrix4(src.matrixWorld);
+            const objs = V.addCustom('custom:copy', m, 'chest', 'skin');
+            const a = src.geometry.attributes, b = objs[0].geometry.attributes, n = a.position.count;
+            let same = 0, sums = 0, blended = 0;
+            const top = (si, sw, i) => { let k = 0; for (let c = 1; c < 4; c++) if (sw.getComponent(i, c) > sw.getComponent(i, k)) k = c; return si.getComponent(i, k); };
+            for (let i = 0; i < n; i++) {
+                if (top(a.skinIndex, a.skinWeight, i) === top(b.skinIndex, b.skinWeight, i)) same++;
+                let s = 0, used = 0; for (let c = 0; c < 4; c++) { s += b.skinWeight.getComponent(i, c); if (b.skinWeight.getComponent(i, c) > 0.05) used++; }
+                if (Math.abs(s - 1) < 1e-4) sums++;
+                if (used > 1) blended++;
+            }
+            V.removePart('custom:copy');
+            return [n, same, sums, blended];
+        })()""")
+        check(bool(got) and got[1] >= 0.9 * got[0] and got[2] == got[0],
+              f"a skinned upload copies the body's game weights (vertices, same main bone, weights sum to 1, blended): {got}")
         page.js("FF.viewer.playing = true")
         time.sleep(0.4)
         page.js("FF.viewer.playing = false; FF.S.step = 'rig'; FF.render()")

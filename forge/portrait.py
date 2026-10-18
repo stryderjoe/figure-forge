@@ -25,7 +25,10 @@ def _srgb(c):
 
 def _triangles(glb):
     """[(positions (n,3), normals (n,3), uvs (n,2) or None, colours (n,4) sRGB or None, indices (m,3),
-    image (h,w,4) float 0..1, blend, head mask (n,) bool, slot)]"""
+    image (h,w,4) float 0..1, blend, head mask (n,) bool, slot, order)], order as the viewer draws them: 0 every
+    part without an occluder, 1 an occluder (the newer games' faces: depth only, so the mouth's inside and teeth
+    show only where the mouth is open), 2 the other pieces of a part with an occluder."""
+    occluded = {r.get('part') for r in glb.meshes() if r.get('occluder')}
     names = {i: n.get('name', '') for i, n in enumerate(glb.nodes)}
     out = []
     for r in glb.meshes():
@@ -51,7 +54,8 @@ def _triangles(glb):
             continue                    # seen edge-on from the front: a line across the neck (the games leave it out)
         if slot in HEAD_SLOTS:
             head[:] = True
-        out.append((pos, nrm, r['uv'], col, r['indices'], img, mode == 'BLEND', head, slot))
+        order = 1 if r.get('occluder') else 2 if r.get('part') in occluded else 0
+        out.append((pos, nrm, r['uv'], col, r['indices'], img, mode == 'BLEND', head, slot, order))
     return out
 
 
@@ -107,11 +111,15 @@ def render(glb_bytes, size=256, supersample=2):
         spec = np.power(np.clip(nn @ half, 0, 1), 48) * 0.35
         return np.clip(rgb * (0.48 + 0.62 * diff[..., None]) + spec[..., None], 0, 1)
 
-    for blend_pass in (False, True):
-        for pos, nrm, uv, col, idx, img, blend, _, _ in tris:
-            if blend != blend_pass:
+    bias = 2e-3 * extent                        # an occluder is pulled toward the eye (the viewer's polygon offset)
+    passes = [(False, 0), (False, 1), (False, 2), (True, 0), (True, 2)]
+    for blend_pass, order_pass in passes:
+        for pos, nrm, uv, col, idx, img, blend, _, _, order in tris:
+            if blend != blend_pass or order != order_pass:
                 continue
             s = to_screen(pos)
+            if order == 1:
+                s[:, 2] += bias
             ih, iw = img.shape[:2]
             for t in idx:
                 a, b, c = s[t[0]], s[t[1]], s[t[2]]
@@ -146,6 +154,9 @@ def render(glb_bytes, size=256, supersample=2):
                     texel = img[ty, tx]
                 else:
                     texel = np.broadcast_to(img[0, 0], (len(z), 4))
+                if order == 1:
+                    depth[yy, xx] = np.maximum(depth[yy, xx], z)        # depth only
+                    continue
                 rgb, a_ = texel[:, :3], texel[:, 3]
                 if col is not None:
                     vc = wb @ col[t]

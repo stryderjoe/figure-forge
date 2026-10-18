@@ -143,7 +143,26 @@ def retarget_json(owner, target, path, fps=None):
         tracks.append({'bone': target.common[j], 'name': tb['name'], 't': [round(x, 5) for x in t],
                        'q': [round(x, 6) for x in q], 's': [round(x, 5) for x in s]})
     return {'name': os.path.splitext(os.path.basename(path))[0], 'fps': fps or 30.0, 'fpsAssumed': fps is None,
-            'frames': clip.frames, 'owner': owner.id, 'target': target.id, 'retargeted': True, 'tracks': tracks}
+            'frames': clip.frames, 'owner': owner.id, 'target': target.id, 'retargeted': True, 'tracks': tracks,
+            'morphs': face_weights(path, clip.frames)}
+
+
+def face_weights(path, frames):
+    """Newer era: {facial target number: [weight per frame]} of a clip's face block, leaving out targets that stay
+    at 0; {} for a clip without one (the classic games print faces, they do not move them)."""
+    if '::' not in str(path):
+        return {}
+    from .formats import modern
+    face = modern.load_face(path)
+    if face is None:
+        return {}
+    rows = [face.pose(f)[0] for f in range(frames)]
+    out = {}
+    for c in range(face.channels):
+        w = [round(float(r[c]), 4) for r in rows]
+        if any(w):
+            out[str(c)] = w
+    return out
 
 
 def find_clip(char, name):
@@ -208,4 +227,4 @@ def clip_json(char, path, fps=None):
         tracks.append({'bone': char.common[j], 'name': char.bones[j]['name'],
                        't': [round(x, 5) for x in t], 'q': [round(x, 6) for x in q], 's': [round(x, 5) for x in s]})
     return {'name': os.path.splitext(os.path.basename(path))[0], 'fps': fps or 30.0, 'fpsAssumed': fps is None,
-            'frames': clip.frames, 'owner': char.id, 'tracks': tracks}
+            'frames': clip.frames, 'owner': char.id, 'tracks': tracks, 'morphs': face_weights(path, clip.frames)}

@@ -113,6 +113,8 @@ class NxgWriter:
 
         out = []
         for rec in glb.meshes():
+            if rec.get('occluder'):
+                continue                # a mouth mask, for the portrait only
             pos = rec['positions'] * mirror
             nrm = rec['normals'] * mirror if rec['normals'] is not None else np.tile([0, 1.0, 0], (len(pos), 1))
             uv = rec['uv'] if rec['uv'] is not None else np.zeros((len(pos), 2))

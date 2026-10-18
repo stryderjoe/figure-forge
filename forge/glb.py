@@ -119,7 +119,8 @@ class Glb:
                        else np.arange(len(pos))).astype(np.int64).reshape(-1, 3)
                 extras = n.get('extras') or {}
                 rec = {'node': i, 'name': n.get('name', ''), 'uv': uv, 'indices': idx, 'material': prim.get('material'),
-                       'slot': extras.get('slot', ''), 'part': extras.get('part', '')}
+                       'slot': extras.get('slot', ''), 'part': extras.get('part', ''),
+                       'occluder': bool(extras.get('occluder'))}
                 if 'COLOR_0' in attr:                  # linear vertex colours (faces of the newer games)
                     rec['colours'] = self.accessor(attr['COLOR_0']).astype(np.float64)
                 if skin is not None and 'JOINTS_0' in attr:

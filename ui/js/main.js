@@ -691,7 +691,7 @@ $('#open-file').onchange = async e => { const f = e.target.files[0]; if (f) awai
 
 window.FF = { S, viewer, thumbs, editor, faces, gameExport, gameRestore, setBase, addPart, removePart, playClip, doExport, openProject, projectJson, render,
               setColour: (key, rgb) => { S.colours[key] = rgb; applyColours(); }, figureMaterials,
-              get prints() { return prints; }, set prints(p) { prints = p; }, PrintEditor, attachCustom };
+              get prints() { return prints; }, set prints(p) { prints = p; }, PrintEditor, attachCustom, THREE, figureGlb: () => figureGlb(viewer) };
 
 const anim = setupAnimUI({ el, $, S, viewer, editor, faces, render: () => render(), api, status, playClip: (a, b) => playClip(a, b) });
 window.FF.anim = anim;

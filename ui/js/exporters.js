@@ -19,7 +19,8 @@ export const FORMATS = [
   { id: 'png', label: 'PNG render', ext: 'png' },
 ];
 
-// the figure as GLB for the game writer: bind pose, no animation, no face-expression pieces
+// the figure as GLB for the game writer: bind pose, no animation, no face-expression pieces; the mouth masks
+// are kept (flagged 'occluder') for the portrait, which hides the inside of a closed mouth with them
 export async function figureGlb(viewer) {
   await viewer.whenTexturesReady();
   const hook = viewer.exportHook;
@@ -27,14 +28,14 @@ export async function figureGlb(viewer) {
   const clip = viewer.clip;
   try {
     viewer.clip = null;
-    return await gltf(viewer, true);
+    return await gltf(viewer, true, true);
   } finally {
     viewer.exportHook = hook;
     viewer.clip = clip;
   }
 }
 
-function gltf(viewer, binary) {
+function gltf(viewer, binary, occluders = false) {
   // export from the bind pose, so the skin's rest pose is right; the clip carries the motion. An editor
   // animation comes through viewer.exportHook (bone tracks plus face expressions as switched pieces).
   const playing = viewer.action, time = playing ? playing.time : 0;
@@ -44,7 +45,7 @@ function gltf(viewer, binary) {
   const animations = hook ? hook.animations : viewer.clip ? [viewer.clip.userData.named] : [];
   // invisible occluders (the newer games' mouth masks) are left out of files
   const hidden = [];
-  viewer.figure.traverse(o => { if (o.userData && o.userData.occluder && o.visible) { o.visible = false; hidden.push(o); } });
+  if (!occluders) viewer.figure.traverse(o => { if (o.userData && o.userData.occluder && o.visible) { o.visible = false; hidden.push(o); } });
   const unhide = () => hidden.forEach(o => { o.visible = true; });
   return new Promise((resolve, reject) => {
     new GLTFExporter().parse(viewer.figure, result => {

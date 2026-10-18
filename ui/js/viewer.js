@@ -243,6 +243,13 @@ export class Viewer {
       if (m.color) g.setAttribute('color', new THREE.Float32BufferAttribute(m.color, 3));
       g.setIndex(m.index);
       if (!m.normal) g.computeVertexNormals();
+      if (m.morphs) {
+        // the newer games' faces: one blend shape per facial target, named by its number (clips key them)
+        g.morphAttributes.position = Object.entries(m.morphs).map(([id, offs]) => {
+          const a = new THREE.Float32BufferAttribute(offs, 3); a.name = id; return a;
+        });
+        g.morphTargetsRelative = true;
+      }
       const mat = this.materialFor(m.material);
       let obj;
       if (m.skinIndex) {
@@ -286,14 +293,16 @@ export class Viewer {
     this.restPose();
     if (mode === 'skin') {
       const joints = this.bones.map(b => new THREE.Vector3().setFromMatrixPosition(b.matrixWorld));
+      const weights = this.bodyWeights(id);
       object.traverse(o => {
         if (!o.isMesh) return;
         const g = o.geometry.clone().applyMatrix4(o.matrixWorld);
         const pos = g.attributes.position, n = pos.count;
         const si = new Uint16Array(n * 4), sw = new Float32Array(n * 4), v = new THREE.Vector3();
         for (let i = 0; i < n; i++) {
-          // the two nearest joints, weighted by inverse square distance (a vertex on a joint follows it alone)
           v.fromBufferAttribute(pos, i);
+          if (weights) { weights(v, si, sw, i * 4); continue; }
+          // no body to copy from: the two nearest joints, weighted by inverse square distance
           let b1 = 0, d1 = Infinity, b2 = 0, d2 = Infinity;
           joints.forEach((j, k) => {
             const d = j.distanceToSquared(v);
@@ -324,6 +333,85 @@ export class Viewer {
     return objs;
   }
 
+  // the figure's own skin weights, to lend to an uploaded object: returns weights(v, si, sw, at), which writes
+  // into si/sw at `at` the blend of the game weights of the body's nearest points to v (the eight nearest, by
+  // inverse square distance; up to four bones), or null when the figure has no pieces. A rigid piece counts
+  // as wholly on its bone. Called in the bind pose.
+  bodyWeights(skipId) {
+    const pts = [], inf = [];
+    const boneIndex = new Map(this.bones.map((b, k) => [b, k]));
+    const v = new THREE.Vector3();
+    for (const [pid, objs] of this.parts) {
+      if (pid === skipId) continue;
+      for (const top of objs) top.traverse(o => {
+        if (!o.isMesh || !o.geometry.attributes.position) return;
+        const pos = o.geometry.attributes.position;
+        o.updateMatrixWorld(true);
+        let rigid = null;
+        if (!o.isSkinnedMesh) {
+          for (let p = o.parent; p && rigid === null; p = p.parent) if (boneIndex.has(p)) rigid = boneIndex.get(p);
+          if (rigid === null) return;
+        }
+        const si = o.geometry.attributes.skinIndex, sw = o.geometry.attributes.skinWeight;
+        const step = Math.max(1, Math.floor(pos.count / 4000));
+        for (let i = 0; i < pos.count; i += step) {
+          v.fromBufferAttribute(pos, i).applyMatrix4(o.matrixWorld);
+          pts.push(v.x, v.y, v.z);
+          if (rigid !== null) inf.push([[rigid, 1]]);
+          else {
+            const w = [];
+            for (let c = 0; c < 4; c++) if (sw.getComponent(i, c) > 0) w.push([si.getComponent(i, c), sw.getComponent(i, c)]);
+            inf.push(w);
+          }
+        }
+      });
+    }
+    const n = inf.length;
+    if (!n) return null;
+    // a grid over the body's points
+    const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
+    for (let i = 0; i < n; i++) for (let c = 0; c < 3; c++) { lo[c] = Math.min(lo[c], pts[i * 3 + c]); hi[c] = Math.max(hi[c], pts[i * 3 + c]); }
+    const h = Math.max(hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2], 1e-6) / 32;
+    const cell = (x, c) => Math.floor((x - lo[c]) / h);
+    const grid = new Map();
+    for (let i = 0; i < n; i++) {
+      const k = `${cell(pts[i * 3], 0)},${cell(pts[i * 3 + 1], 1)},${cell(pts[i * 3 + 2], 2)}`;
+      if (!grid.has(k)) grid.set(k, []);
+      grid.get(k).push(i);
+    }
+    const K = 8;
+    return (q, si, sw, at) => {
+      const cx = cell(q.x, 0), cy = cell(q.y, 1), cz = cell(q.z, 2);
+      const best = [];                                  // [distance squared, point], nearest first
+      const offer = i => {
+        const dx = pts[i * 3] - q.x, dy = pts[i * 3 + 1] - q.y, dz = pts[i * 3 + 2] - q.z, d = dx * dx + dy * dy + dz * dz;
+        if (best.length === K && d >= best[K - 1][0]) return;
+        let j = best.length < K ? best.length : K - 1;
+        while (j > 0 && best[j - 1][0] > d) { best[j] = best[j - 1]; j--; }
+        best[j] = [d, i];
+      };
+      // rings of cells outward, until the eighth nearest is nearer than the next ring can be
+      for (let r = 0; r < 64; r++) {
+        for (let x = cx - r; x <= cx + r; x++) for (let y = cy - r; y <= cy + r; y++) for (let z = cz - r; z <= cz + r; z++) {
+          if (Math.max(Math.abs(x - cx), Math.abs(y - cy), Math.abs(z - cz)) !== r) continue;
+          const list = grid.get(`${x},${y},${z}`);
+          if (list) list.forEach(offer);
+        }
+        if (best.length === K && best[K - 1][0] <= (r * h) * (r * h)) break;
+      }
+      if (!best.length) for (let i = 0; i < n; i++) offer(i);
+      const acc = new Map();
+      const near = Math.max(best[0][0], 1e-12);
+      for (const [d, i] of best) {
+        const w = near / Math.max(d, 1e-12);          // the nearest point counts 1, others less
+        for (const [b, bw] of inf[i]) acc.set(b, (acc.get(b) || 0) + w * bw);
+      }
+      const top = [...acc].sort((a, b) => b[1] - a[1]).slice(0, 4);
+      const sum = top.reduce((s, e) => s + e[1], 0) || 1;
+      top.forEach(([b, w], c) => { si[at + c] = b; sw[at + c] = w / sum; });
+    };
+  }
+
   customMaterial(src) {
     const s = Array.isArray(src) ? src[0] : src;
     const key = 'custom:' + (s && s.uuid || THREE.MathUtils.generateUUID());
@@ -345,12 +433,21 @@ export class Viewer {
       tracks.push(new THREE.QuaternionKeyframeTrack(`${name}.quaternion`, times, t.q));
       tracks.push(new THREE.VectorKeyframeTrack(`${name}.scale`, times, t.s));
     }
+    // the face: each facial target's weight, on every piece that has that blend shape
+    const shaped = [];
+    if (clipData.morphs && Object.keys(clipData.morphs).length) {
+      this.figure.traverse(o => { if (o.isMesh && o.morphTargetDictionary) shaped.push(o); });
+      for (const o of shaped) for (const [id, w] of Object.entries(clipData.morphs)) {
+        if (o.morphTargetDictionary[id] === undefined || w.length !== times.length) continue;
+        tracks.push(new THREE.NumberKeyframeTrack(`${o.uuid}.morphTargetInfluences[${id}]`, times, w));
+      }
+    }
     const clip = new THREE.AnimationClip(clipData.name, times[times.length - 1] || 0, tracks);
     clip.userData = { fps: clipData.fps, frames: clipData.frames, byName: {} };
-    // a copy addressed by bone name, for exporters
+    // a copy addressed by bone (and piece) name, for exporters
     clip.userData.named = new THREE.AnimationClip(clipData.name, clip.duration, tracks.map(tr => {
-      const bone = this.bones.find(b => tr.name.startsWith(b.uuid));
-      const c = tr.clone(); c.name = tr.name.replace(bone.uuid, bone.name); return c;
+      const node = this.bones.find(b => tr.name.startsWith(b.uuid)) || shaped.find(o => tr.name.startsWith(o.uuid));
+      const c = tr.clone(); c.name = tr.name.replace(node.uuid, node.name); return c;
     }));
     this.mixer = new THREE.AnimationMixer(this.figure);
     this.action = this.mixer.clipAction(clip);
@@ -365,6 +462,7 @@ export class Viewer {
   stop() {
     if (this.mixer) { this.mixer.stopAllAction(); this.mixer.uncacheRoot(this.figure); }
     this.mixer = null; this.action = null; this.clip = null; this.playing = false;
+    this.figure.traverse(o => { if (o.morphTargetInfluences) o.morphTargetInfluences.fill(0); });
     this.showRest();
   }
 

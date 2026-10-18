@@ -83,10 +83,12 @@ def restamp_all(data, picture):
 # LEGO Pirates leaves a new character out of the game as soon as it finds a portrait of its own for it in
 # icons_tex.pak (tried in the running game, 2026-10-17): with a 128, 64 or 32 pixel portrait it never joined the
 # party, with a 4 x 4 one it did; the pack's size, order, spelling and numbers, the collect line and the figure's
-# texture size were each ruled out. Its new characters go without one (the game looks a portrait up by the
-# character's name, so the circle stays empty).
-NO_NEW_PORTRAIT = {'pirates': 'LEGO Pirates: the new character has no portrait (the game leaves a new character out '
-                              'when it has one of its own).'}
+# texture size were each ruled out. Pointing the new character at a cut character's portrait (SHELLMAN, its
+# image redrawn as the figure, the pack's entries and size unchanged) left it out too (2026-10-18): what counts
+# is a full-size portrait that is not its body's. So its new characters keep their body's portrait (the text's
+# icon line is left naming it).
+NO_NEW_PORTRAIT = {'pirates': "LEGO Pirates: the new character shows its body's portrait (the game leaves a new "
+                              'character out when it has one of its own).'}
 
 # Portraits in LEGO Pirates' icons_tex.pak that no character of the game names (not in any character's text,
 # collection.txt, a level's or a cutscene's text): cut characters

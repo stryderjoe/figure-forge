@@ -33,6 +33,7 @@ class An3:
             with open(path, "rb") as f:
                 data = f.read()
         d = data[base:]
+        self._base = base
         # Unrelocated block (tag '5INA'; one file known, a level's own animation in LEGO Star Wars: TCS,
         # LEVELS\EPISODE_IV\DEATHSTARESCAPE\DEATHSTARESCAPE_INTRO\DEATHSTARESCAPE_INTRO.AN3): a u32 in front of
         # the tag gives the offset of a fix-up table (count, then the places of the header's seven pointers),
@@ -69,11 +70,14 @@ class An3:
             (self.frames,) = struct.unpack_from(e + "H", d, 22)
             self.ratio, self.first = struct.unpack_from(e + "ff", d, 72)
         self.node_flags = list(d[csf:csf + self.nodes]) if csf else []
+        # a face block (the newer games' 'BSA' block: one node, one channel per facial target, 37 in LEGO Batman
+        # 2 and Marvel): every channel is a weight, none is switched off by the node's flags
+        self.face = self.modern and self.nodes == 1 and self.channels > 10
         self.active = []
         for node in range(self.nodes):
             fl = self.node_flags[node] if node < len(self.node_flags) else 0xFF
             for ch in range(self.channels):
-                if not self.modern or self.channels == 1:
+                if not self.modern or self.channels == 1 or self.face:
                     on = True
                 elif ch < 3:
                     on = bool(fl & 2)
@@ -161,7 +165,7 @@ class An3:
 
     def pose(self, frame):
         """Per node: (tx, ty, tz, rx, ry, rz[, sx, sy, sz]) at a frame (as many values as the block has channels).
-        A channel its node switches off reads 0."""
+        A channel its node switches off reads 0 (a scale channel 1)."""
         frame = max(0, min(frame, self.frames - 1))
         out, curve, i = [], 0, 0
         for node in range(self.nodes):
@@ -169,7 +173,9 @@ class An3:
             for ch in range(self.channels):
                 kt, on = self.key_types[i], self.active[i]
                 i += 1
-                if not on or kt == 14:
+                if not on and self.modern and self.channels in (9, 10) and 6 <= ch < 9:
+                    values.append(1.0)          # scale switched off: the bone keeps its size
+                elif not on or kt == 14:
                     values.append(0.0)
                 elif kt >= 16:
                     values.append(self.constant(kt))
@@ -207,6 +213,18 @@ class An4Set:
         if len(self.names) == len(self.blocks) + len(self.errors):
             for block, name in zip(self.blocks, self.names):
                 block.name = name
+
+    def face(self):
+        """The set's face block: the block right after a 'BSA' header (20 bytes; reversed when little-endian)
+        that reads as a face block (one node, a weight per facial target) with its keys where they should be,
+        or None. Channel i is the weight of the facial target numbered i in the models."""
+        import re
+        for m in re.finditer(rb"BSA\0|\0ASB", self.data):
+            at = m.start() + 20
+            block = next((b for b in self.blocks if b._base == at), None)
+            if block is not None and block.face and block.moving == block.slots:
+                return block
+        return None
 
 
 def euler_matrix(rx, ry, rz, order="xyz"):
